@@ -2,6 +2,8 @@
 
 Проверка условий провайдеров: **12 ноября 2026 года**. Все расчёты ниже — планировочные гипотезы. Реального benchmark моделей и 100 потоков ещё нет.
 
+Расширенный обзор: [41 сервис, тариф или программа, шесть схем пайплайна, источники и план пилота](RESEARCH_OPTIONS.md). Там также разобраны новые Vercel Daemons, Northflank, Modal и ограничения российских предложений для новых аккаунтов.
+
 ## Что означает 24/7
 
 Нужно отдельно обеспечить: доступность камер, непрерывный приём для pre-roll, декодирование кадров, inference, события/БД, хранение фрагментов и доставку пользователю. Работающий сайт не подтверждает работу этих компонентов. Бесплатный интерфейс также не предоставляет бесплатный GPU.
@@ -50,7 +52,9 @@ v0.1 по умолчанию ограничивает evidence 500 МБ и на�
 
 [Fluid compute pricing](https://vercel.com/docs/functions/usage-and-pricing): Hobby включает 4 часа Active CPU и 360 GB-hours provisioned memory в месяц; 1 млн invocations. 100 камер на 1 fps при допущении 50 мс требуют **в 900 раз больше** включённого CPU. Memory billed пока запрос ждёт IO тоже важна. Hobby предназначен для некоммерческих персональных проектов; применимость тарифа нужно проверить при изменении назначения.
 
-[Functions limits](https://vercel.com/docs/functions/limitations): ограниченная длительность вызова; не постоянный FFmpeg collector. [Cron](https://vercel.com/docs/schedules/cron-jobs/usage-and-pricing): Hobby не чаще раза в сутки. Вариант в этом проекте — frontend/редкие API-операции, но не обещание непрерывной записи всех потоков.
+[Functions limits](https://vercel.com/docs/functions/limitations): ограниченная длительность вызова. Это ограничение Functions, а не всех продуктов Vercel. [Cron](https://vercel.com/docs/schedules/cron-jobs/usage-and-pricing): Hobby не чаще раза в сутки.
+
+**Дополнение исследования:** [Daemons](https://vercel.com/docs/daemons) поддерживают постоянный container process, включая Hobby. Их [отдельные квоты](https://vercel.com/docs/daemons/limits) — 5 CPU-ч и 420 GB-ч/месяц, минимум 1 GiB на экземпляр. Даже 1 GiB × 720 часов превышает память; квоты Functions на Daemons автоматически не переносить. У Daemons нет persistent local storage и inbound HTTP/TCP. Для нашего проекта Vercel остаётся кандидатом на frontend/редкие API-операции, а бесплатный полный месяц непрерывного collector не подтверждён.
 
 ### Cloudflare
 

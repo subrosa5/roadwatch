@@ -65,6 +65,7 @@ uv run --python 3.12 --with-requirements collector/requirements.txt \
 
 ## Документация
 
+- [Исследование способов запуска: 41 сервис/тариф/программа, схемы и выбор](docs/RESEARCH_OPTIONS.md)
 - [Архитектура и гарантии](docs/ARCHITECTURE.md)
 - [Ресурсы и бесплатные тарифы](docs/CAPACITY.md)
 - [Источники камер](docs/SOURCES.md)
