@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+recordings/
+models/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.tar.gz
+.openai/local/
