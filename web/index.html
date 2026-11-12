@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Приватная консоль Roadwatch: дорожные камеры, события и видеосвидетельства. Демонстрация обозначена явно."
+    />
+    <title>Roadwatch — Москва</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="#cameras" aria-label="Roadwatch"
+        ><span class="brand-symbol">↗</span
+        ><span>roadwatch<span class="brand-dot">.</span></span></a
+      >
+      <div class="workspace-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <div class="workspace">
+        <span class="workspace-icon">М</span>
+        <div>Москва и область<small>ДТП · дым · огонь</small></div>
+        <span class="chevron">⌄</span>
+      </div>
+      <nav id="navigation">
+        <button data-page="cameras" class="nav active">
+          <span>▦</span>Камеры <b>100<span> цель</span></b></button
+        ><button data-page="events" class="nav">
+          <span>◷</span>События <b id="nav-event-count">3</b></button
+        ><button data-page="coverage" class="nav"><span>◎</span>Покрытие</button
+        ><button data-page="capacity" class="nav"><span>▥</span>Ресурсы</button
+        ><button data-page="sources" class="nav">
+          <span>⌁</span>Источники
+        </button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="status-dot mint"></span>Приватная разработка
+        <p>Настоящие источники подключаются после проверки.</p>
+        <button id="connect-button" class="text-button">
+          Подключить API ↗
+        </button>
+      </div>
+      <div class="sidebar-footer">
+        <span class="avatar">s</span>
+        <div>subrosa<small>Roadwatch / v0.1</small></div>
+        <span class="lock">⌑</span>
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <button class="mobile-menu" id="menu-button" aria-label="Открыть меню">
+          ☰
+        </button>
+        <div class="breadcrumbs">
+          Рабочее пространство <span>/</span>
+          <strong id="breadcrumb">Камеры</strong>
+        </div>
+        <div class="topbar-right">
+          <span id="clock"></span
+          ><span class="mode-badge" id="mode-badge">Демонстрация</span
+          ><button
+            class="notification-button"
+            id="notification-button"
+            aria-label="Открыть события"
+          >
+            ♧<span></span>
+          </button>
+        </div>
+      </header>
+      <main>
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">MOSCOW INCIDENT OBSERVATORY</div>
+            <h1 id="page-title">Ситуация под наблюдением<span>.</span></h1>
+            <p id="page-subtitle">
+              Камеры, признаки происшествий и записи — в одном окне.
+            </p>
+          </div>
+          <button id="simulate-button" class="primary-button">
+            <span>＋</span> Демо-событие
+          </button>
+        </div>
+        <div class="demo-notice" id="demo-notice">
+          <span>◈</span>
+          <p>
+            <strong>Учебный режим.</strong> Видео и детекции синтетические.
+            Реальные камеры не подключены.
+          </p>
+          <button id="notice-sources">Источники ↗</button>
+        </div>
+        <div id="connection-error" class="error-banner" hidden></div>
+        <section class="metrics" aria-label="Состояние системы">
+          <article>
+            <div class="metric-label">Подключено камер <span>↗</span></div>
+            <div class="metric-value">
+              <span id="connected-count">0</span><small>/ 100</small>
+            </div>
+            <div class="metric-bottom">
+              <span class="status-dot gray"></span
+              ><span id="connected-caption">50 минимум · 100 цель</span>
+            </div>
+          </article>
+          <article>
+            <div class="metric-label">События <span>◷</span></div>
+            <div class="metric-value" id="event-count">3</div>
+            <div class="metric-bottom">
+              <span class="status-dot orange"></span
+              ><span id="events-caption">Учебные примеры</span>
+            </div>
+          </article>
+          <article>
+            <div class="metric-label">Ждут проверки <span>◌</span></div>
+            <div class="metric-value" id="pending-count">3</div>
+            <div class="metric-bottom">Подтверждает оператор</div>
+          </article>
+          <article>
+            <div class="metric-label">Режим наблюдения <span>⌁</span></div>
+            <div class="metric-value text-value" id="monitor-mode">
+              Не запущен
+            </div>
+            <div class="metric-bottom" id="monitor-caption">
+              24/7 ещё не подтверждено
+            </div>
+          </article>
+        </section>
+        <section id="page-cameras" class="page active">
+          <div class="section-row">
+            <div class="zone-tabs" role="group" aria-label="Зона камеры">
+              <button class="selected" data-zone="all">Все камеры</button
+              ><button data-zone="garden">Садовое</button
+              ><button data-zone="ttk">ТТК</button
+              ><button data-zone="mkad">МКАД</button>
+            </div>
+            <div class="section-hint">
+              <span class="status-dot mint"></span
+              ><span id="scene-count">3 учебных сцены</span>
+            </div>
+          </div>
+          <div class="camera-layout">
+            <div class="camera-column">
+              <article class="camera-view">
+                <div class="camera-toolbar">
+                  <div>
+                    <span class="status-dot mint"></span
+                    ><strong id="camera-name">Садовое · учебная сцена</strong>
+                  </div>
+                  <span class="video-label" id="video-label"
+                    >SYNTHETIC / 12s LOOP</span
+                  >
+                </div>
+                <div class="viewport" id="viewport">
+                  <video
+                    id="camera-video"
+                    autoplay
+                    loop
+                    muted
+                    playsinline
+                    preload="metadata"
+                    aria-label="Синтетическая дорожная сцена"
+                  ></video
+                  ><img
+                    id="camera-frame"
+                    alt="Последний полученный кадр"
+                    hidden
+                  /><canvas id="overlay" aria-label="Рамки детекций"></canvas>
+                  <div class="viewport-top">
+                    <span class="scene-tag" id="scene-tag">УЧЕБНАЯ СЦЕНА</span
+                    ><span id="frame-time"></span>
+                  </div>
+                  <div class="viewport-bottom">
+                    <span id="model-name">DEMO ANNOTATIONS · НЕ МОДЕЛЬ CV</span
+                    ><span id="detection-count">3 объекта</span>
+                  </div>
+                  <div id="video-unavailable" hidden>Кадр ещё не получен</div>
+                </div>
+                <div class="camera-controls">
+                  <button
+                    id="pause-button"
+                    class="icon-button"
+                    aria-label="Приостановить видео"
+                  >
+                    Ⅱ
+                  </button>
+                  <div class="timeline"><span></span></div>
+                  <span id="video-time">00:00 / 00:12</span
+                  ><label class="toggle-label"
+                    ><input id="boxes-toggle" type="checkbox" checked /><span
+                      class="switch"
+                    ></span>
+                    Детекции</label
+                  ><button
+                    id="fullscreen-button"
+                    class="icon-button"
+                    aria-label="Полный экран"
+                  >
+                    ⛶
+                  </button>
+                </div>
+              </article>
+              <div class="analysis-row">
+                <article class="analysis-card">
+                  <span class="tiny-label">АНАЛИТИКА КАДРА</span>
+                  <div id="analysis-tags" class="analysis-tags"></div>
+                  <p id="analysis-note">
+                    Рамки — заранее заданная разметка учебного видео, не
+                    результат нейросети.
+                  </p>
+                </article>
+                <article class="analysis-card">
+                  <span class="tiny-label">ПРИВЯЗКА К МЕСТУ</span>
+                  <div class="location-title" id="location-title">
+                    Учебная сцена
+                  </div>
+                  <p id="location-note">
+                    Реальной геопривязки нет. Координаты события не
+                    выдумываются.
+                  </p>
+                </article>
+              </div>
+              <div class="section-row camera-list-heading">
+                <h2>Выбрать камеру</h2>
+                <span class="muted">Демонстрационные сцены</span>
+              </div>
+              <div class="camera-picker" id="camera-picker"></div>
+            </div>
+            <aside class="event-panel">
+              <div class="event-panel-heading">
+                <h2>Лента событий <span id="feed-count">3</span></h2>
+                <button id="all-events-button">Все ↗</button>
+              </div>
+              <div class="feed-filter">
+                <span class="status-dot orange"></span>Кандидаты для проверки
+                оператором
+              </div>
+              <div id="event-feed"></div>
+              <div class="feed-footer">
+                События сохраняются сервером после подключения API. Открытая
+                вкладка для этого не требуется.
+              </div>
+            </aside>
+          </div>
+        </section>
+        <section id="page-events" class="page">
+          <div class="section-row">
+            <h2>Журнал событий</h2>
+            <select id="event-filter" aria-label="Фильтр событий">
+              <option value="all">Все события</option>
+              <option value="collision">Возможные ДТП</option>
+              <option value="smoke">Возможный дым</option>
+              <option value="fire">Видимое пламя</option>
+              <option value="unreviewed">Не проверены</option>
+            </select>
+          </div>
+          <div id="event-table" class="event-table"></div>
+        </section>
+        <section id="page-coverage" class="page">
+          <div class="coverage-layout">
+            <article class="panel coverage-map">
+              <div class="section-row">
+                <h2>Три зоны наблюдения</h2>
+                <span class="pill">Схема · не карта камер</span>
+              </div>
+              <svg
+                viewBox="0 0 700 540"
+                role="img"
+                aria-label="Схематические кольца Москвы, целевые зоны покрытия"
+              >
+                <defs>
+                  <pattern
+                    id="grid"
+                    width="32"
+                    height="32"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <path
+                      d="M32 0H0V32"
+                      fill="none"
+                      stroke="#26303a"
+                      stroke-width=".5"
+                    />
+                  </pattern>
+                </defs>
+                <rect width="700" height="540" fill="url(#grid)" />
+                <g transform="translate(350,270) rotate(-12)">
+                  <ellipse
+                    rx="250"
+                    ry="199"
+                    fill="none"
+                    stroke="#657c8b"
+                    stroke-width="2"
+                  />
+                  <ellipse
+                    rx="169"
+                    ry="129"
+                    fill="none"
+                    stroke="#92b5ac"
+                    stroke-width="2"
+                  />
+                  <ellipse
+                    rx="85"
+                    ry="65"
+                    fill="#8ee2c00b"
+                    stroke="#8ee2c0"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M-300 60L290-85M-135-230L130 240M-270-170L280 180"
+                    stroke="#34453c"
+                    stroke-width="1"
+                  />
+                </g>
+                <g fill="#a9bbb6" font-family="sans-serif" font-size="14">
+                  <text x="325" y="264">Москва</text>
+                  <text x="415" y="228">Садовое</text>
+                  <text x="510" y="186">ТТК</text>
+                  <text x="580" y="140">МКАД</text>
+                </g>
+              </svg>
+              <p>
+                Реальные точки появятся только после проверки координат и
+                доступа к кадрам.
+              </p>
+            </article>
+            <article class="panel">
+              <h2>План подключения</h2>
+              <div class="coverage-zone">
+                <b>01</b>
+                <div>Внутри Садового<small>Минимум 15 · цель 30</small></div>
+                <strong>0 / 30</strong>
+              </div>
+              <div class="coverage-zone">
+                <b>02</b>
+                <div>ТТК и съезды<small>Минимум 15 · цель 30</small></div>
+                <strong>0 / 30</strong>
+              </div>
+              <div class="coverage-zone">
+                <b>03</b>
+                <div>МКАД<small>Минимум 20 · цель 40</small></div>
+                <strong>0 / 40</strong>
+              </div>
+              <div class="inline-note">
+                100 точек в каталоге не означают 100 наблюдаемых камер. Счётчик
+                меняется только при поступлении свежих кадров.
+              </div>
+            </article>
+          </div>
+        </section>
+        <section id="page-capacity" class="page">
+          <div class="capacity-layout">
+            <article class="panel">
+              <h2>Ресурсный планировщик</h2>
+              <p class="muted">
+                Оценка нагрузки. Это не измеренная производительность.
+              </p>
+              <label class="range-label"
+                >Камеры <output id="camera-output">100</output
+                ><input
+                  id="capacity-cameras"
+                  type="range"
+                  min="1"
+                  max="100"
+                  value="100" /></label
+              ><label class="range-label"
+                >Кадров в секунду на камеру <output id="fps-output">1</output
+                ><input
+                  id="capacity-fps"
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="1"
+                  value="2" /></label
+              ><label class="range-label"
+                >CPU на кадр, мс <output id="cpu-output">50</output
+                ><input
+                  id="capacity-cpu"
+                  type="range"
+                  min="10"
+                  max="500"
+                  step="10"
+                  value="50" /></label
+              ><label class="range-label"
+                >Битрейт потока, Мбит/с <output id="bitrate-output">1</output
+                ><input
+                  id="capacity-bitrate"
+                  type="range"
+                  min="0.25"
+                  max="4"
+                  step="0.25"
+                  value="1"
+              /></label>
+              <div class="inline-note">
+                Бесплатный лимит Vercel Hobby: 4 часа активного CPU в месяц.
+                Приём видео и декодирование считаются отдельно. Резерв и повторы
+                здесь не учтены.
+              </div>
+            </article>
+            <article class="panel capacity-results">
+              <span class="tiny-label">РАСЧЁТ ДЛЯ 30 ДНЕЙ</span>
+              <div class="capacity-line">
+                <span>Анализируемых кадров / сутки</span
+                ><strong id="capacity-frames"></strong>
+              </div>
+              <div class="capacity-line">
+                <span>Активный CPU / месяц</span
+                ><strong id="capacity-hours"></strong>
+              </div>
+              <div class="capacity-line">
+                <span>Входящее видео / сутки</span
+                ><strong id="capacity-bandwidth"></strong>
+              </div>
+              <div class="capacity-line">
+                <span>Буфер до события · 60 секунд</span
+                ><strong id="capacity-buffer"></strong>
+              </div>
+              <div id="capacity-verdict" class="capacity-verdict"></div>
+              <p class="muted">
+                100 камер × 1 Мбит/с = 100 Мбит/с постоянно, или примерно 1.08
+                ТБ входящего видео в сутки. Сохранение только событий сокращает
+                архив, но не эту нагрузку.
+              </p>
+            </article>
+          </div>
+        </section>
+        <section id="page-sources" class="page">
+          <article class="panel">
+            <div class="section-row">
+              <div>
+                <h2>Реестр реальных источников</h2>
+                <p class="muted">
+                  Кандидаты не включаются в наблюдение автоматически.
+                </p>
+              </div>
+              <span class="pill">Подключено: 0</span>
+            </div>
+            <div class="source-table">
+              <div class="source-head">
+                <span>Источник / участок</span><span>Доступ к кадрам</span
+                ><span>Геопривязка</span><span>Состояние</span>
+              </div>
+              <div>
+                <span
+                  ><strong>Inetcom · шоссе Энтузиастов</strong
+                  ><small>Москва, Лефортово · кандидат для ТТК</small></span
+                ><span>Не подтверждён</span><span>Нужна проверка</span
+                ><span class="pill warning">Выключен</span>
+              </div>
+              <div>
+                <span
+                  ><strong>Inetcom · Носовихинское шоссе</strong
+                  ><small>Балашиха · резерв за пределами колец</small></span
+                ><span>Не подтверждён</span><span>Нужна проверка</span
+                ><span class="pill warning">Выключен</span>
+              </div>
+            </div>
+            <div class="inline-note">
+              Следующий этап подключения: штатный доступ к свежему кадру из
+              облака, проверка условий обработки, координат и направления
+              камеры. Закрытые камеры ЦОДД и «Безопасного региона» не
+              подключены.
+            </div>
+          </article>
+        </section>
+      </main>
+      <footer class="main-footer">
+        <span>ROADWATCH / RESEARCH BUILD 0.1</span
+        ><span>Кандидаты на события требуют проверки человеком</span>
+      </footer>
+    </div>
+    <dialog id="event-dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="tiny-label">КАРТОЧКА СОБЫТИЯ</span>
+          <h2 id="event-dialog-title"></h2>
+        </div>
+        <button
+          id="close-event"
+          class="icon-button"
+          aria-label="Закрыть событие"
+        >
+          ×
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div id="clip-container">
+          <video
+            id="event-video"
+            controls
+            playsinline
+            preload="metadata"
+          ></video>
+          <div id="clip-empty" hidden>Видео ещё не сохранено</div>
+        </div>
+        <div class="event-details" id="event-details"></div>
+        <div class="review-actions">
+          <button id="confirm-event" class="primary-button">Подтвердить</button
+          ><button id="dismiss-event" class="secondary-button">
+            Ложное срабатывание</button
+          ><a id="download-clip" class="text-button" download
+            >Скачать фрагмент ↓</a
+          >
+        </div>
+        <p class="muted small">
+          Подтверждение меняет статус в журнале. Сообщение в экстренные службы
+          не отправляется.
+        </p>
+      </div>
+    </dialog>
+    <dialog id="connect-dialog">
+      <div class="dialog-heading">
+        <h2>Подключить backend</h2>
+        <button id="close-connect" class="icon-button" aria-label="Закрыть">
+          ×
+        </button>
+      </div>
+      <form id="connect-form" class="dialog-body">
+        <p class="muted">
+          Нужен развёрнутый Roadwatch API. Токен остаётся только в памяти этой
+          вкладки.
+        </p>
+        <label
+          >Адрес API<input
+            id="api-url"
+            type="url"
+            placeholder="https://your-roadwatch.example"
+            required /></label
+        ><label
+          >Viewer token<input
+            id="api-token"
+            type="password"
+            autocomplete="off"
+            minlength="32"
+            required
+        /></label>
+        <p id="connect-error" class="error-text"></p>
+        <button class="primary-button" type="submit">Подключиться</button
+        ><button id="demo-mode-button" class="secondary-button" type="button">
+          Вернуться к демонстрации
+        </button>
+      </form>
+    </dialog>
+    <div
+      class="toast-container"
+      id="toasts"
+      role="status"
+      aria-live="polite"
+    ></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

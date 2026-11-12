@@ -1,0 +1,12 @@
+{
+  "approved_for_cloud_run": false,
+  "api_url": "https://YOUR_PRIVATE_ROADWATCH_API",
+  "buffer_root": "/data/ring",
+  "fps": 1,
+  "pre_seconds": 10,
+  "post_seconds": 10,
+  "daily_inference_cpu_seconds": 240,
+  "model_version": "UNCONFIGURED",
+  "models": [],
+  "cameras": []
+}

@@ -1,0 +1,59 @@
+[
+  {
+    "id": "demo-garden",
+    "name": "Садовое · учебная сцена",
+    "zone": "garden",
+    "enabled": true,
+    "approved": true,
+    "demo": true,
+    "latitude": null,
+    "longitude": null,
+    "location_note": "Синтетическая сцена, не трансляция Москвы"
+  },
+  {
+    "id": "demo-ttk",
+    "name": "ТТК · учебная сцена",
+    "zone": "ttk",
+    "enabled": true,
+    "approved": true,
+    "demo": true,
+    "latitude": null,
+    "longitude": null,
+    "location_note": "Синтетическая сцена, не трансляция Москвы"
+  },
+  {
+    "id": "demo-mkad",
+    "name": "МКАД · учебная сцена",
+    "zone": "mkad",
+    "enabled": true,
+    "approved": true,
+    "demo": true,
+    "latitude": null,
+    "longitude": null,
+    "location_note": "Синтетическая сцена, не трансляция Москвы"
+  },
+  {
+    "id": "moscow-entuziastov",
+    "name": "Шоссе Энтузиастов · кандидат",
+    "zone": "ttk",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "latitude": null,
+    "longitude": null,
+    "source_page": "https://www.geocam.ru/online/entuziastov/",
+    "location_note": "Направление камеры и координаты не проверены; сайт владельца недоступен при проверке"
+  },
+  {
+    "id": "balashikha-nosovikhinskoe",
+    "name": "Носовихинское шоссе · резерв",
+    "zone": "oblast",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "latitude": null,
+    "longitude": null,
+    "source_page": "https://www.geocam.ru/online/nosovikhinskoe-shosse/",
+    "location_note": "Жилгородок, 9А по каталогу; не входит в основную раскладку колец"
+  }
+]
