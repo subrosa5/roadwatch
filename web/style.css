@@ -543,7 +543,49 @@ h2 {
 }
 .public-embed .viewport-top,
 .public-embed .viewport-bottom {
-  pointer-events: none;
+  display: none;
+}
+.public-embed > canvas {
+  display: none;
+}
+.embed-unavailable {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 30px;
+  background: #101916;
+  color: var(--text);
+}
+.embed-unavailable p {
+  max-width: 500px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.embed-help {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+  background: #111b17;
+}
+.embed-help p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.embed-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.embed-actions a {
+  font-size: 13px;
+  color: var(--mint);
 }
 .viewport-top,
 .viewport-bottom {
@@ -1437,4 +1479,11 @@ dialog::backdrop {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+#camera-live {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
 }

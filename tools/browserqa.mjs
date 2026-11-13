@@ -63,17 +63,17 @@ try {
     await page.locator("#event-dialog").evaluate((d) => d.open),
     false,
   );
-  await page.locator('[data-zone="mkad"]').click();
+  await page.locator('[data-zone="reserve"]').click();
   assert.equal(await page.locator("#camera-picker .camera-choice").count(), 1);
   await page.locator('[data-camera="demo-mkad"]').click();
-  assert.match(await page.locator("#camera-name").textContent(), /МКАД/);
+  assert.match(await page.locator("#camera-name").textContent(), /огонь/);
   await page.locator('[data-page="capacity"]').click();
-  assert.match(await page.locator("#capacity-hours").textContent(), /108/);
+  assert.match(await page.locator("#capacity-hours").textContent(), /72/);
   await page.locator("#capacity-fps").fill("0");
   await page.locator("#capacity-fps").dispatchEvent("input");
   assert.match(
     await page.locator("#capacity-verdict").textContent(),
-    /укладывается/,
+    /укладываются/,
   );
   await page.screenshot({
     path: "docs/screenshots/capacity.png",
@@ -109,9 +109,89 @@ try {
       .evaluate((el) => el.classList.contains("active")),
     true,
   );
+  await page.setViewportSize({ width: 1512, height: 1100 });
+  let playerLoads = 0,
+    checks = 0;
+  await page.route("https://open.ivideon.com/**", (route) => {
+    playerLoads++;
+    return route.fulfill({
+      contentType: "text/html",
+      body: "<p>Fixture public player</p>",
+    });
+  });
+  await page.route("**/api/**", async (route) => {
+    const p = new URL(route.request().url()).pathname;
+    if (p === "/api/health")
+      return route.fulfill({ json: { backend: "Sites D1/R2" } });
+    if (p === "/api/cameras")
+      return route.fulfill({
+        json: [
+          {
+            id: "khimki-mkad74",
+            name: "МКАД · проверка недоступного плеера",
+            zone: "mkad",
+            demo: false,
+            health: "disabled",
+            embed_url:
+              "https://open.ivideon.com/embed/v3/?server=fixture&camera=0&lang=ru",
+          },
+        ],
+      });
+    if (p === "/api/stats")
+      return route.fulfill({
+        json: {
+          mode: "cloud",
+          receiving_real: 0,
+          daily_frames: 0,
+          daily_frame_limit: 500,
+        },
+      });
+    if (p.endsWith("/playback-check")) {
+      checks++;
+      return route.fulfill({
+        json: {
+          status: "unavailable",
+          reason: "api_timeout",
+          video_verified: false,
+        },
+      });
+    }
+    if (p === "/api/events" || p === "/api/sources")
+      return route.fulfill({ json: [] });
+    return route.continue();
+  });
+  await page.goto(base);
+  await page.waitForFunction(
+    () => !document.getElementById("embed-unavailable").hidden,
+  );
+  assert.equal(await page.locator("#camera-embed").isHidden(), true);
+  assert.equal(await page.locator(".camera-controls").isHidden(), true);
+  assert.equal(await page.locator(".viewport-top").isHidden(), true);
+  assert.match(
+    await page.locator("#open-embed-owner").getAttribute("href"),
+    /^https:\/\/open\.ivideon\.com\//,
+  );
+  await page.waitForTimeout(5500);
+  assert.equal(checks, 1, "polling must not restart failed playback checks");
+  await page.locator("#show-embed").click();
+  await page.waitForFunction(
+    () => !document.getElementById("camera-embed").hidden,
+  );
+  const loads = playerLoads;
+  await page.waitForTimeout(5500);
+  assert.equal(playerLoads, loads, "polling must preserve the public player");
+  await page.locator("#retry-embed").click();
+  await page.waitForFunction(
+    () => !document.getElementById("embed-unavailable").hidden,
+  );
+  assert.equal(checks, 2);
+  await page.screenshot({
+    path: "docs/screenshots/playback-error.png",
+    fullPage: true,
+  });
   assert.deepEqual(errors, []);
   console.log(
-    "Browser QA passed: video playback, events/review, zones, capacity, API connection, mobile and no uncaught errors.",
+    "Browser QA passed: video/events/review, mobile, cloud playback timeout/retry, player preservation during polling and no uncaught errors.",
   );
 } finally {
   await browser.close();

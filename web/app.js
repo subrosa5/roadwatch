@@ -1,5 +1,57 @@
+import { LivePlayer, publicStream } from "./live.js";
 const $ = (id) => document.getElementById(id);
 let hosted = false;
+const playbackStates = new Map();
+function renderPlayback(id, url) {
+  if (selected?.id !== id) return;
+  const state = playbackStates.get(id),
+    failed = state?.status === "unavailable" && !state.force;
+  $("camera-embed").hidden = !!failed;
+  $("embed-unavailable").hidden = !failed;
+  $("show-embed").hidden = !failed;
+  $("retry-embed").disabled = state?.status === "checking";
+  $("open-embed-owner").href = url;
+  if (failed) {
+    $("camera-embed").removeAttribute("src");
+    $("embed-error-detail").textContent =
+      state.reason === "api_timeout"
+        ? "API Ivideon не ответил на запрос запуска за 8 секунд. Изображение с камеры не получено."
+        : "Запрос запуска к API Ivideon завершился ошибкой. Изображение с камеры не получено.";
+    $("embed-status").textContent =
+      "Запуск не подтверждён. Можно повторить проверку или открыть оригинальный плеер. Это не ошибка детектора CV.";
+  } else {
+    if ($("camera-embed").src !== url) $("camera-embed").src = url;
+    $("embed-status").textContent =
+      state?.status === "checking"
+        ? "Проверяем API запуска. Воспроизведение выполняется плеером владельца."
+        : "Видео во внешнем плеере не подтверждено автоматически. Если оно не появилось, повторите проверку или откройте оригинал.";
+  }
+}
+async function checkPlayback(id, url, force = false) {
+  const cached = playbackStates.get(id);
+  if (!force && cached) {
+    renderPlayback(id, url);
+    return;
+  }
+  playbackStates.set(id, { status: "checking" });
+  renderPlayback(id, url);
+  try {
+    const result = await request(
+      "/api/cameras/" +
+        encodeURIComponent(id) +
+        "/playback-check" +
+        (force ? "?refresh=1" : ""),
+      { method: "POST" },
+    ).then((r) => r.json());
+    playbackStates.set(id, result);
+  } catch {
+    playbackStates.set(id, {
+      status: "unverified",
+      reason: "check_unavailable",
+    });
+  }
+  renderPlayback(id, url);
+}
 const cloudDemo = new URLSearchParams(location.search).has("cloud-demo");
 const esc = (value) =>
   String(value ?? "").replace(
@@ -22,22 +74,22 @@ const STATUS = {
 const demoCameras = [
   {
     id: "demo-garden",
-    name: "Садовое · учебная сцена",
-    zone: "garden",
+    name: "Учебная сцена · ДТП",
+    zone: "interstate29",
     demo: true,
     kind: "collision",
   },
   {
     id: "demo-ttk",
-    name: "ТТК · учебная сцена",
-    zone: "ttk",
+    name: "Учебная сцена · дым",
+    zone: "interstate35",
     demo: true,
     kind: "smoke",
   },
   {
     id: "demo-mkad",
-    name: "МКАД · учебная сцена",
-    zone: "mkad",
+    name: "Учебная сцена · огонь",
+    zone: "reserve",
     demo: true,
     kind: "fire",
   },
@@ -84,7 +136,7 @@ const time = (value) =>
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    timeZone: "Europe/Moscow",
+    timeZone: "America/Chicago",
   }).format(new Date(value));
 const dateTime = (value) =>
   new Intl.DateTimeFormat("ru-RU", {
@@ -93,7 +145,7 @@ const dateTime = (value) =>
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    timeZone: "Europe/Moscow",
+    timeZone: "America/Chicago",
   }).format(new Date(value));
 const camera = (id) => cameras.find((c) => c.id === id);
 function toast(message) {
@@ -129,7 +181,8 @@ function setPage(value) {
   $("page-subtitle").textContent = {
     cameras: "Камеры, признаки происшествий и записи — в одном окне.",
     events: "События, статусы проверки и доступные видеосвидетельства.",
-    coverage: "Пилот до 3 камер · число источников определяется замерами.",
+    coverage:
+      "Пилот 2 камеры Iowa DOT · число источников определяется замерами.",
     capacity: "Сопоставление нагрузки и бесплатных облачных квот.",
     sources: "Доступность, направление обзора и геопривязка.",
   }[value];
@@ -165,12 +218,13 @@ function renderEvents() {
   ).length;
 }
 function renderPicker() {
+  $("picker-caption").textContent = mode === "demo" ? "Учебные сцены" : "Публичные потоки Iowa DOT";
   const visible = cameras.filter((c) => zone === "all" || c.zone === zone);
   $("camera-picker").innerHTML =
     visible
       .map(
         (c) =>
-          `<button class="camera-choice ${selected?.id === c.id ? "selected" : ""}" data-camera="${esc(c.id)}"><div class="camera-thumb">${c.demo ? `<video src="./clips/${esc(c.kind || "collision")}.mp4" muted playsinline preload="metadata"></video>` : ""}<span>${c.demo ? "SYNTHETIC" : c.embed_url ? "ПУБЛИЧНЫЙ ПЛЕЕР · БЕЗ CV" : esc(c.health === "receiving" ? "КАДРЫ ПОСТУПАЮТ" : "НЕТ СВЕЖИХ КАДРОВ")}</span></div><strong>${esc(c.name)}</strong><small>${c.demo ? "Учебное видео · не Москва" : esc(c.location_note || "Геопривязка не проверена")}</small></button>`,
+          `<button class="camera-choice ${selected?.id === c.id ? "selected" : ""}" data-camera="${esc(c.id)}"><div class="camera-thumb">${c.demo ? `<video src="./clips/${esc(c.kind || "collision")}.mp4" muted playsinline preload="metadata"></video>` : ""}<span>${c.demo ? "SYNTHETIC" : c.stream_url ? "HLS · БЕЗ СЕРВЕРНОГО CV" : c.embed_url ? "ПУБЛИЧНЫЙ ПЛЕЕР · БЕЗ CV" : esc(c.health === "receiving" ? "КАДРЫ ПОСТУПАЮТ" : "НЕТ СВЕЖИХ КАДРОВ")}</span></div><strong>${esc(c.name)}</strong><small>${c.demo ? "Учебное видео · не реальная камера" : esc(c.location_note || "Геопривязка не проверена")}</small></button>`,
       )
       .join("") || '<div class="empty">В этой зоне пока нет камер</div>';
   $("scene-count").textContent =
@@ -178,12 +232,30 @@ function renderPicker() {
       ? `${visible.length} учебных сцены`
       : `${visible.length} камер в реестре`;
 }
+
+const livePlayer = new LivePlayer($("camera-live"), (state) => {
+  if (!selected?.stream_url) return;
+  $("camera-state-dot").className =
+    "status-dot " + (state.status === "playing" ? "mint" : "gray");
+  $("live-status").textContent =
+    state.status === "playing"
+      ? `Видео поступает · ${state.width}×${state.height} · кадр получен ${time(state.lastFrame)} CT · серверный CV не запущен`
+      : state.status === "connecting"
+        ? "Подключаем публичный HLS-поток Iowa DOT…"
+        : state.reason;
+});
+$("retry-live").addEventListener("click", () => {
+  if (selected?.stream_url) livePlayer.connect(selected.stream_url, true);
+});
+window.addEventListener("pagehide", () => livePlayer.destroy());
 async function selectCamera(id) {
   selected = camera(id);
   if (!selected) return;
   renderPicker();
   $("camera-name").textContent = selected.name;
   const demo = mode === "demo";
+  const stream = !demo ? publicStream(selected.stream_url) : null;
+  const live = !!stream;
   let embed = null;
   if (!demo && selected.embed_url) {
     try {
@@ -198,13 +270,23 @@ async function selectCamera(id) {
   }
   const embedNode = $("camera-embed");
   embedNode.hidden = !embed;
-  $("viewport").classList.toggle("public-embed", !!embed);
+  $("viewport").classList.toggle("public-embed", !!embed || live);
+  $("embed-help").hidden = !embed;
+  document.querySelector(".camera-controls").hidden = !!embed || live;
+  $("camera-live").hidden = !live;
+  $("live-help").hidden = !live;
+  if (!live) livePlayer.stop();
+  $("camera-state-dot").className =
+    "status-dot " + (demo || selected.health === "receiving" ? "mint" : "gray");
   if (embed) {
-    if (embedNode.src !== embed) embedNode.src = embed;
-  } else embedNode.removeAttribute("src");
+    void checkPlayback(selected.id, embed);
+  } else {
+    embedNode.removeAttribute("src");
+    $("embed-unavailable").hidden = true;
+  }
   $("camera-video").hidden = !demo;
-  $("camera-frame").hidden = demo || !!embed;
-  $("video-unavailable").hidden = demo || !!embed;
+  $("camera-frame").hidden = demo || !!embed || live;
+  $("video-unavailable").hidden = demo || !!embed || live;
   $("pause-button").hidden = !demo;
   $("scene-tag").textContent = demo
     ? "УЧЕБНАЯ СЦЕНА"
@@ -236,6 +318,13 @@ async function selectCamera(id) {
       .play()
       .catch(() => {});
     $("pause-button").textContent = "Ⅱ";
+  } else if (live) {
+    $("camera-video").pause();
+    $("video-label").textContent = "IOWA DOT · HLS · CV НЕ ПОДКЛЮЧЁН";
+    $("analysis-note").textContent =
+      "Прямой публичный поток Iowa DOT. Серверная модель и фоновый мониторинг не запущены. Время ниже показывает получение кадра браузером, а не момент съёмки.";
+    $("live-owner").href = selected.source_page;
+    livePlayer.connect(stream);
   } else if (embed) {
     $("scene-tag").textContent = "ПЛЕЕР ВЛАДЕЛЬЦА";
     $("video-label").textContent = "PUBLIC EMBED · CV НЕ ПОДКЛЮЧЁН";
@@ -339,7 +428,7 @@ async function openEvent(id) {
   $("event-dialog-title").textContent = TYPE[e.type].name;
   $("event-details").innerHTML = [
     ["Источник", cam?.name || e.camera_id],
-    ["Время кадра · МСК", dateTime(e.captured_at)],
+    ["Время кадра · CT", dateTime(e.captured_at)],
     ["Статус", STATUS[e.status]],
     ["Происхождение", e.demo ? "Синтетический пример" : e.model],
     [
@@ -511,14 +600,20 @@ function draw() {
       ctx.fillText(label, x * w + 5, y * h - 5);
     }
   }
-  $("detection-count").textContent = boxes.length + " объекта";
+  $("detection-count").textContent =
+    mode !== "demo" && !selected?.latest
+      ? "CV не подключён"
+      : boxes.length + " объекта";
   $("analysis-tags").innerHTML =
     boxes
       .map(
         (b) =>
           `<span class="${b.label !== "vehicle" ? "hot" : ""}">${esc(b.label)} ${Math.round(b.score * 100)}%</span>`,
       )
-      .join("") || "<span>Нет детекций</span>";
+      .join("") ||
+    (mode !== "demo" && !selected?.latest
+      ? "<span>Нет данных анализа</span>"
+      : "<span>Нет детекций</span>");
   if (mode === "demo") {
     $("frame-time").textContent =
       "DEMO · " + String(Math.floor(t)).padStart(2, "0") + " s";
@@ -527,7 +622,7 @@ function draw() {
     document.querySelector(".timeline span").style.width = (t / 12) * 100 + "%";
   } else {
     $("frame-time").textContent = selected?.latest?.captured_at
-      ? time(selected.latest.captured_at) + " МСК"
+      ? time(selected.latest.captured_at) + " CT"
       : "ВРЕМЯ НЕИЗВЕСТНО";
     $("video-time").textContent = "Последний кадр";
   }
@@ -558,13 +653,14 @@ function calculate() {
     gb.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " ГБ";
   $("capacity-buffer").textContent =
     buffer.toLocaleString("ru-RU", { maximumFractionDigits: 2 }) + " ГБ";
-  const fits = hours <= 4;
+  const fits = frames <= 500;
   $("capacity-verdict").classList.toggle("fit", fits);
-  $("capacity-verdict").textContent = fits
-    ? "По этой оценке модель укладывается в 4 CPU-часа. Это не подтверждение: декодирование, память, повторы и доступ к камерам требуют измерения."
-    : "Активного CPU требуется в " +
-      (hours / 4).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) +
-      " раза больше бесплатного лимита Vercel. Бесплатный режим 24/7 с такими параметрами не подтверждён.";
+  $("capacity-verdict").textContent =
+    `${Math.round(frames).toLocaleString("ru-RU")} кадров/сутки при лимите API 500. ` +
+    (fits
+      ? "Наблюдения укладываются в лимит API. "
+      : "Нельзя отправлять каждый результат в текущий API; нужно менять лимит и схему агрегации. ") +
+    "Расчёт CPU не включает декодирование. Постоянный исполнитель CV не подключён; фоновая запись не выполняется.";
 }
 
 document.addEventListener("click", (e) => {
@@ -610,6 +706,16 @@ $("pause-button").onclick = () => {
 $("fullscreen-button").onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen?.();
   else $("viewport").requestFullscreen?.();
+};
+$("retry-embed").onclick = () => {
+  if (selected?.embed_url)
+    void checkPlayback(selected.id, selected.embed_url, true);
+};
+$("show-embed").onclick = () => {
+  if (!selected?.embed_url) return;
+  const state = playbackStates.get(selected.id) || {};
+  playbackStates.set(selected.id, { ...state, force: true });
+  renderPlayback(selected.id, selected.embed_url);
 };
 $("simulate-button").onclick = () => {
   if (mode !== "demo") return;
@@ -700,7 +806,7 @@ async function showProbes() {
     ? data
         .map(
           (p) =>
-            `${p.source_id}: ${p.reachable ? "страница отвечает (HTTP " + p.http_status + ")" : p.error || "HTTP " + p.http_status} · ${dateTime(p.checked_at)} МСК · видеопоток не проверен`,
+            `${p.source_id}: ${p.source_id.startsWith("playback:") ? (p.status === "unavailable" ? "API запуска недоступен (" + p.reason + ")" : "API ответил; видео не подтверждено") : p.reachable ? "страница отвечает (HTTP " + p.http_status + ")" : p.error || "HTTP " + p.http_status} · ${dateTime(p.checked_at)} CT · видеопоток не проверен`,
         )
         .join(" | ")
     : "Облачная проверка ещё не запускалась. Видеопотоки не подтверждены.";
@@ -732,7 +838,7 @@ $("camera-video").addEventListener("error", () => {
   $("video-unavailable").hidden = false;
 });
 setInterval(() => {
-  $("clock").textContent = time(new Date()) + " МСК";
+  $("clock").textContent = time(new Date()) + " CT";
 }, 1000);
 setInterval(refresh, 5000);
 renderEvents();

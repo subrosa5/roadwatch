@@ -9,7 +9,7 @@
       name="description"
       content="Приватная консоль Roadwatch: дорожные камеры, события и видеосвидетельства. Демонстрация обозначена явно."
     />
-    <title>Roadwatch — Москва</title>
+    <title>Roadwatch — Iowa</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -21,12 +21,12 @@
       <div class="workspace-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <div class="workspace">
         <span class="workspace-icon">М</span>
-        <div>Москва и область<small>ДТП · дым · огонь</small></div>
+        <div>Iowa, USA<small>ДТП · дым · огонь</small></div>
         <span class="chevron">⌄</span>
       </div>
       <nav id="navigation">
         <button data-page="cameras" class="nav active">
-          <span>▦</span>Камеры <b>3<span> пилот</span></b></button
+          <span>▦</span>Камеры <b>2<span> пилот</span></b></button
         ><button data-page="events" class="nav">
           <span>◷</span>События <b id="nav-event-count">3</b></button
         ><button data-page="coverage" class="nav"><span>◎</span>Покрытие</button
@@ -76,7 +76,7 @@
       <main>
         <div class="page-heading">
           <div>
-            <div class="eyebrow">MOSCOW INCIDENT OBSERVATORY</div>
+            <div class="eyebrow">IOWA INCIDENT OBSERVATORY</div>
             <h1 id="page-title">Ситуация под наблюдением<span>.</span></h1>
             <p id="page-subtitle">
               Камеры, признаки происшествий и записи — в одном окне.
@@ -97,13 +97,15 @@
         <div id="connection-error" class="error-banner" hidden></div>
         <section class="metrics" aria-label="Состояние системы">
           <article>
-            <div class="metric-label">Подключено камер <span>↗</span></div>
+            <div class="metric-label">Камер с серверным CV <span>↗</span></div>
             <div class="metric-value">
-              <span id="connected-count">0</span><small>/ 3 пилот</small>
+              <span id="connected-count">0</span><small>/ 2 пилот</small>
             </div>
             <div class="metric-bottom">
               <span class="status-dot gray"></span
-              ><span id="connected-caption">Сначала 1 камера · затем до 3</span>
+              ><span id="connected-caption"
+                >Две камеры Iowa DOT · серверный CV: 0</span
+              >
             </div>
           </article>
           <article>
@@ -133,9 +135,9 @@
           <div class="section-row">
             <div class="zone-tabs" role="group" aria-label="Зона камеры">
               <button class="selected" data-zone="all">Все камеры</button
-              ><button data-zone="garden">Садовое</button
-              ><button data-zone="ttk">ТТК</button
-              ><button data-zone="mkad">МКАД</button>
+              ><button data-zone="interstate29">I-29 / I-80</button
+              ><button data-zone="interstate35">I-35</button
+              ><button data-zone="reserve">Учебный резерв</button>
             </div>
             <div class="section-hint">
               <span class="status-dot mint"></span
@@ -147,8 +149,8 @@
               <article class="camera-view">
                 <div class="camera-toolbar">
                   <div>
-                    <span class="status-dot mint"></span
-                    ><strong id="camera-name">Садовое · учебная сцена</strong>
+                    <span id="camera-state-dot" class="status-dot mint"></span
+                    ><strong id="camera-name">Учебная сцена · ДТП</strong>
                   </div>
                   <span class="video-label" id="video-label"
                     >SYNTHETIC / 12s LOOP</span
@@ -163,6 +165,15 @@
                     playsinline
                     preload="metadata"
                     aria-label="Синтетическая дорожная сцена"
+                  ></video
+                  ><video
+                    id="camera-live"
+                    controls
+                    autoplay
+                    muted
+                    playsinline
+                    hidden
+                    aria-label="Дорожная камера Iowa DOT"
                   ></video
                   ><img
                     id="camera-frame"
@@ -187,6 +198,47 @@
                     ><span id="detection-count">3 объекта</span>
                   </div>
                   <div id="video-unavailable" hidden>Кадр ещё не получен</div>
+                  <div id="embed-unavailable" class="embed-unavailable" hidden>
+                    <strong>Не удалось запустить видеопоток</strong>
+                    <p id="embed-error-detail">
+                      Публичный API владельца камеры не отвечает.
+                    </p>
+                  </div>
+                </div>
+                <div id="embed-help" class="embed-help" hidden>
+                  <p id="embed-status" role="status">
+                    Проверяем доступность запуска камеры…
+                  </p>
+                  <div class="embed-actions">
+                    <button id="retry-embed" class="text-button">
+                      Повторить запуск
+                    </button>
+                    <a
+                      id="open-embed-owner"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >Открыть у владельца ↗</a
+                    >
+                    <button id="show-embed" class="text-button" hidden>
+                      Показать плеер без проверки
+                    </button>
+                  </div>
+                </div>
+                <div id="live-help" class="embed-help" hidden>
+                  <p id="live-status" role="status">Подключаем Iowa DOT…</p>
+                  <div class="embed-actions">
+                    <button id="retry-live" class="text-button">
+                      Переподключить</button
+                    ><a
+                      id="live-owner"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >Источник: Iowa DOT ↗</a
+                    ><span
+                      >Время: Central Time · камера не определяет точное место
+                      события</span
+                    >
+                  </div>
                 </div>
                 <div class="camera-controls">
                   <button
@@ -234,7 +286,7 @@
               </div>
               <div class="section-row camera-list-heading">
                 <h2>Выбрать камеру</h2>
-                <span class="muted">Демонстрационные сцены</span>
+                <span class="muted" id="picker-caption">Учебные сцены</span>
               </div>
               <div class="camera-picker" id="camera-picker"></div>
             </div>
@@ -249,8 +301,7 @@
               </div>
               <div id="event-feed"></div>
               <div class="feed-footer">
-                События сохраняются сервером после подключения API. Открытая
-                вкладка для этого не требуется.
+                Автоматический анализ сейчас не запущен. Здесь появятся подтверждённые сервером кандидаты после подключения исполнителя.
               </div>
             </aside>
           </div>
@@ -276,64 +327,31 @@
                 <span class="pill">Схема · не карта камер</span>
               </div>
               <svg
-                viewBox="0 0 700 540"
+                viewBox="0 0 700 450"
                 role="img"
-                aria-label="Схематические кольца Москвы, целевые зоны покрытия"
+                aria-label="Схема расположения двух камер Iowa DOT; не дорожная карта"
               >
-                <defs>
-                  <pattern
-                    id="grid"
-                    width="32"
-                    height="32"
-                    patternUnits="userSpaceOnUse"
-                  >
-                    <path
-                      d="M32 0H0V32"
-                      fill="none"
-                      stroke="#26303a"
-                      stroke-width=".5"
-                    />
-                  </pattern>
-                </defs>
-                <rect width="700" height="540" fill="url(#grid)" />
-                <g transform="translate(350,270) rotate(-12)">
-                  <ellipse
-                    rx="250"
-                    ry="199"
-                    fill="none"
-                    stroke="#657c8b"
-                    stroke-width="2"
-                  />
-                  <ellipse
-                    rx="169"
-                    ry="129"
-                    fill="none"
-                    stroke="#92b5ac"
-                    stroke-width="2"
-                  />
-                  <ellipse
-                    rx="85"
-                    ry="65"
-                    fill="#8ee2c00b"
-                    stroke="#8ee2c0"
-                    stroke-width="2"
-                  />
-                  <path
-                    d="M-300 60L290-85M-135-230L130 240M-270-170L280 180"
-                    stroke="#34453c"
-                    stroke-width="1"
-                  />
+                <path
+                  d="M90 300L300 190L580 170M340 60L335 370"
+                  fill="none"
+                  stroke="#526b62"
+                  stroke-width="5"
+                />
+                <g fill="#99dfc0">
+                  <circle cx="140" cy="273" r="9" />
+                  <circle cx="335" cy="190" r="9" />
                 </g>
-                <g fill="#a9bbb6" font-family="sans-serif" font-size="14">
-                  <text x="325" y="264">Москва</text>
-                  <text x="415" y="228">Садовое</text>
-                  <text x="510" y="186">ТТК</text>
-                  <text x="580" y="140">МКАД</text>
+                <g fill="#d3dfd8" font-family="sans-serif" font-size="18">
+                  <text x="90" y="325">Council Bluffs</text>
+                  <text x="350" y="225">West Des Moines</text>
+                  <text x="385" y="145">I-80</text>
+                  <text x="350" y="85">I-35</text>
+                  <text x="140" y="100">IOWA · USA</text>
                 </g>
               </svg>
               <p>
-                Реальные точки появятся только после проверки координат и
-                доступа к кадрам.
+                Схема, не навигационная карта. Координаты камер взяты из
+                официального каталога Iowa DOT.
               </p>
             </article>
             <article class="panel">
@@ -341,7 +359,7 @@
               <div class="coverage-zone">
                 <b>01</b>
                 <div>
-                  Городская дорога<small
+                  Council Bluffs · I-29/80<small
                     >Перекрёсток и видимые траектории</small
                   >
                 </div>
@@ -350,20 +368,20 @@
               <div class="coverage-zone">
                 <b>02</b>
                 <div>
-                  Магистраль / съезд<small>Поток машин и остановки</small>
+                  West Des Moines · I-35<small>Поток машин и остановки</small>
                 </div>
                 <strong>0 / 1</strong>
               </div>
               <div class="coverage-zone">
                 <b>03</b>
                 <div>
-                  Москва / область<small>Открытый обзор для дыма и огня</small>
+                  Резерв<small>Подбор после проверки стабильности</small>
                 </div>
                 <strong>0 / 1</strong>
               </div>
               <div class="inline-note">
-                Рабочий охват увеличивается после замеров. Кандидаты и схема
-                колец не подтверждают доступ к кадрам. Без банковской карты.
+                Рабочий охват увеличивается после замеров. Проверка видео не
+                означает, что запущен серверный CV. Без банковской карты.
               </div>
             </article>
           </div>
@@ -376,13 +394,13 @@
                 Оценка нагрузки. Это не измеренная производительность.
               </p>
               <label class="range-label"
-                >Камеры <output id="camera-output">3</output
+                >Камеры <output id="camera-output">2</output
                 ><input
                   id="capacity-cameras"
                   type="range"
                   min="1"
                   max="100"
-                  value="3" /></label
+                  value="2" /></label
               ><label class="range-label"
                 >Кадров в секунду на камеру <output id="fps-output">1</output
                 ><input
@@ -406,15 +424,16 @@
                 ><input
                   id="capacity-bitrate"
                   type="range"
-                  min="0.25"
+                  min="0.05"
                   max="4"
-                  step="0.25"
-                  value="1"
+                  step="0.001"
+                  value="0.198"
               /></label>
               <div class="inline-note">
-                Бесплатный лимит Vercel Hobby: 4 часа активного CPU в месяц.
-                Приём видео и декодирование считаются отдельно. Резерв и повторы
-                здесь не учтены.
+                Пилот: 2 камеры, около 4,28 ГБ видео/сутки по среднему битрейту
+                плейлистов. Текущий API допускает 500 наблюдений/сутки;
+                постоянный исполнитель CV отсутствует. CPU на кадр —
+                предположение до измерения модели.
               </div>
             </article>
             <article class="panel capacity-results">
@@ -437,9 +456,9 @@
               </div>
               <div id="capacity-verdict" class="capacity-verdict"></div>
               <p class="muted">
-                100 камер × 1 Мбит/с = 100 Мбит/с постоянно, или примерно 1.08
-                ТБ входящего видео в сутки. Сохранение только событий сокращает
-                архив, но не эту нагрузку.
+                Буфер за 60 секунд: около 2,97 МБ на две камеры. Пять
+                30-секундных клипов в сутки за 7 дней: около 26 МБ при среднем
+                битрейте. Это расчёт, не подтверждение фоновой записи.
               </p>
             </article>
           </div>
@@ -450,42 +469,42 @@
               <div>
                 <h2>Реестр реальных источников</h2>
                 <p class="muted">
-                  Кандидаты не включаются в наблюдение автоматически.
+                  Открытые потоки Iowa DOT. Просмотр видео и фоновый CV имеют
+                  разные статусы.
                 </p>
               </div>
-              <span class="pill">Подключено: 0</span>
+              <span class="pill">Видео: 2 · CV: 0</span>
             </div>
             <div class="source-table">
               <div class="source-head">
-                <span>Источник / участок</span><span>Доступ к кадрам</span
-                ><span>Геопривязка</span><span>Состояние</span>
+                <span>Источник / участок</span><span>Видео</span
+                ><span>Координаты</span><span>CV</span>
               </div>
               <div>
                 <span
-                  ><strong>Гигавайдер · Юбилейный / Дружбы</strong
-                  ><small>Химки · публичный плеер владельца</small></span
-                ><span>Не подтверждён</span><span>Нужна проверка</span
-                ><span class="pill warning">Выключен</span>
+                  ><strong>Iowa DOT · CBTV51</strong
+                  ><small>Council Bluffs · I-29/80</small></span
+                ><span>480×270 · HLS</span><span>41.231837, -95.884798</span
+                ><span class="pill warning">Не запущен</span>
               </div>
               <div>
                 <span
-                  ><strong>Гигавайдер · мост Свободы / МКАД</strong
-                  ><small>74 км по каталогу · ракурс проверяется</small></span
-                ><span>Не подтверждён</span><span>Нужна проверка</span
-                ><span class="pill warning">Выключен</span>
+                  ><strong>Iowa DOT · WWDTV039</strong
+                  ><small>West Des Moines · I-35</small></span
+                ><span>768×432 · HLS</span><span>41.559167, -93.776648</span
+                ><span class="pill warning">Не запущен</span>
               </div>
             </div>
             <div class="inline-note">
-              Третий резервный ракурс: Юбилейный проспект, ТЦ «Лига». Плееры
-              опубликованы владельцем:
+              Источник:
               <a
-                href="https://gigavider.ru/online/"
+                href="https://iowadot.gov/travel-tools/iowa-511/511-data-feeds"
                 target="_blank"
                 rel="noopener noreferrer"
-                >gigavider.ru</a
-              >. Серверное CV и запись не подключены. Preview может быть старым;
-              наличие плеера не подтверждает свежесть кадров или доступ к
-              архиву.
+                >Iowa Department of Transportation</a
+              >. Два коротких сегмента декодированы 13.11.2026. Просмотр
+              получает видео напрямую от DOT; проверка сайта не подтверждает
+              непрерывность потока. Серверный CV и запись событий не запущены.
             </div>
             <button id="probe-button" class="text-button">
               Проверить доступность из облака ↗
@@ -580,6 +599,7 @@
       role="status"
       aria-live="polite"
     ></div>
+    <script src="./vendor/hls.light.min.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

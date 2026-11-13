@@ -15,7 +15,8 @@
     "build:cloud": "node tools/build-cloud.mjs",
     "init-env": "node tools/init-env.mjs",
     "retention": "node --env-file-if-exists=.env tools/retention.mjs",
-    "check": "node tools/check.mjs"
+    "check": "node tools/check.mjs",
+    "capacity:iowa": "node tools/iowa-budget.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0"

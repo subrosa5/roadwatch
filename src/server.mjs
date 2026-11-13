@@ -121,7 +121,7 @@ export async function createApp({
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob: https://video2.iowadot.gov:8888 https://video4.iowadot.gov:8888; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     );
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {

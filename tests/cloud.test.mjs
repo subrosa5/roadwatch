@@ -14,7 +14,7 @@ const { createWorker } = await import(
   "data:text/javascript;base64," + Buffer.from(bundle).toString("base64")
 );
 const SECRET = "a".repeat(64);
-function setup() {
+function setup(fetcher) {
   const sql = new DatabaseSync(":memory:");
   sql.exec(
     readFileSync(new URL("../cloud/schema.sql", import.meta.url), "utf8"),
@@ -75,7 +75,7 @@ function setup() {
   };
   const env = { DB, BUCKET, INGEST_TOKEN: SECRET };
   const worker = createWorker(
-    async () => new Response("<title>Provider catalog</title>"),
+    fetcher || (async () => new Response("<title>Provider catalog</title>")),
   );
   const call = (path, options = {}, user = false) =>
     worker.fetch(
@@ -189,7 +189,7 @@ test("cloud rejects disabled cameras, stale input and exhausted quota", async ()
     (
       await s.post("/api/observations", {
         ...obs("a", t),
-        camera_id: "moscow-entuziastov",
+        camera_id: "iowa-cbtv51",
         demo: false,
       })
     ).status,
@@ -275,7 +275,7 @@ test("cloud probes persist reachability without asserting camera or CV access", 
   const p = await s.post("/api/ops/probe-sources", {});
   assert.equal(p.status, 200);
   const probes = await (await s.call("/api/sources")).json();
-  assert.equal(probes.length, 5);
+  assert.equal(probes.length, 3);
   assert.ok(
     probes.every(
       (x) =>
@@ -311,5 +311,29 @@ test("cloud retention removes expired video while keeping its audit hash", async
   assert.equal(
     (await (await s.call("/api/events?demo=1")).json())[0].recording_status,
     "unavailable",
+  );
+});
+
+test("international registry excludes retired cameras and separates playback from CV", async () => {
+  const s = setup();
+  await s.post("/api/ops/init", {});
+  const cs = await (await s.call("/api/cameras")).json();
+  assert.equal(cs.length, 2);
+  assert.ok(
+    cs.every(
+      (c) =>
+        c.id.startsWith("iowa-") &&
+        c.source_kind === "public_hls" &&
+        c.latitude &&
+        c.longitude,
+    ),
+  );
+  assert.ok(
+    cs.every((c) => !c.approved && !c.enabled && c.health === "disabled"),
+  );
+  assert.equal((await (await s.call("/api/stats")).json()).monitoring, false);
+  assert.equal(
+    (await s.call("/api/cameras/khimki-mkad74/playback-diagnostics")).status,
+    404,
   );
 });

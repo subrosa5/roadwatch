@@ -46,7 +46,7 @@ const post = (path, body) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-if (input.operation === "browser") {
+if (["browser", "live"].includes(input.operation)) {
   const { chromium } = await import("@playwright/test");
   const browser = await chromium.launch({
     headless: true,
@@ -68,10 +68,16 @@ if (input.operation === "browser") {
     const h = { ...request.headers() };
     delete h["oai-sites-authorization"];
     delete h.authorization;
-    if (!same) return route.abort();
+    const external = new URL(request.url());
+    const publicIowa =
+      external.protocol === "https:" &&
+      /^video[24]\.iowadot\.gov$/.test(external.hostname) &&
+      external.port === "8888";
+    if (!same && !(input.operation === "live" && publicIowa))
+      return route.abort();
     const response = await fetch(request.url(), {
       method: request.method(),
-      headers: { ...h, ...headers },
+      headers: same ? { ...h, ...headers } : { Accept: "*/*" },
       body: request.postDataBuffer() || undefined,
       redirect: "manual",
     });
@@ -86,56 +92,120 @@ if (input.operation === "browser") {
     });
   });
   try {
-    await page.goto(origin.href + "?cloud-demo=1");
-    await page.waitForFunction(
-      () =>
-        document.getElementById("mode-badge").textContent ===
-        "Учебный облачный API",
-    );
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll("#camera-picker .camera-choice").length === 3,
-    );
-    await page.locator("#event-feed [data-event]").first().click();
-    await page.waitForFunction(
-      () => document.getElementById("event-video").readyState >= 1,
-    );
-    await page.locator("#event-video").evaluate(async (v) => {
-      v.muted = true;
-      await v.play();
-    });
-    await page.waitForFunction(
-      () => document.getElementById("event-video").currentTime > 0,
-    );
-    const video = await page
-      .locator("#event-video")
-      .evaluate((v) => ({ duration: v.duration, width: v.videoWidth }));
-    if (video.duration < 10 || video.width < 100)
-      throw Error("Cloud clip not playable");
-    await page.screenshot({
-      path: "docs/screenshots/cloud.png",
-      fullPage: true,
-    });
-    await page.locator("#close-event").click();
-    await page.goto(origin.href);
-    await page.waitForFunction(
-      () =>
-        document.getElementById("mode-badge").textContent === "Облачный журнал",
-    );
-    await page.waitForFunction(
-      () => document.getElementById("event-count").textContent === "0",
-    );
-    if (!(await page.locator("#demo-notice").isHidden()))
-      throw Error("Real mode contains demo notice");
-    if (errors.length) throw Error("Cloud UI errors: " + errors.join(", "));
-    console.log(
-      JSON.stringify({
-        cloud_ui: true,
-        playable_saved_clip: video,
-        real_journal_empty: true,
-        uncaught_errors: errors.length,
-      }),
-    );
+    if (input.operation === "live") {
+      await post("/api/ops/init", {});
+      await page.goto(origin.href);
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll("#camera-picker .camera-choice").length ===
+          2,
+      );
+      const results = [];
+      for (const id of ["iowa-cbtv51", "iowa-wwdtv039"]) {
+        await page.locator('[data-camera="' + id + '"]').click();
+        await page.waitForFunction(
+          () => {
+            const v = document.getElementById("camera-live");
+            return v.readyState >= 2 && v.videoWidth > 0 && !v.paused;
+          },
+          null,
+          { timeout: 45000 },
+        );
+        const first = await page
+          .locator("#camera-live")
+          .evaluate((v) => v.currentTime);
+        await page.waitForFunction(
+          (t) => document.getElementById("camera-live").currentTime > t + 1,
+          first,
+          { timeout: 15000 },
+        );
+        const result = await page
+          .locator("#camera-live")
+          .evaluate((v) => ({
+            width: v.videoWidth,
+            height: v.videoHeight,
+            currentTime: v.currentTime,
+            readyState: v.readyState,
+          }));
+        // Cross the API refresh interval: a refresh must not reload the HLS engine.
+        await page.waitForTimeout(6000);
+        const after = await page
+          .locator("#camera-live")
+          .evaluate((v) => v.currentTime);
+        if (after < result.currentTime)
+          throw Error("Polling reset live player");
+        if (!(await page.locator("#overlay").isHidden()))
+          throw Error("Unverified boxes overlay real video");
+        results.push({ camera: id, ...result, pollingPreservesPlayer: true });
+      }
+      await page.screenshot({
+        path: "docs/screenshots/iowa-live.png",
+        fullPage: true,
+      });
+      if (errors.length) throw Error("Live UI errors: " + errors.join(", "));
+      console.log(
+        JSON.stringify({
+          live: results,
+          uncaughtErrors: errors.length,
+          transport:
+            "Test browser uses Node HTTPS bridge; provider receives no Sites credentials",
+          serverCV: false,
+        }),
+      );
+    } else {
+      await page.goto(origin.href + "?cloud-demo=1");
+      await page.waitForFunction(
+        () =>
+          document.getElementById("mode-badge").textContent ===
+          "Учебный облачный API",
+      );
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll("#camera-picker .camera-choice").length ===
+          3,
+      );
+      await page.locator("#event-feed [data-event]").first().click();
+      await page.waitForFunction(
+        () => document.getElementById("event-video").readyState >= 1,
+      );
+      await page.locator("#event-video").evaluate(async (v) => {
+        v.muted = true;
+        await v.play();
+      });
+      await page.waitForFunction(
+        () => document.getElementById("event-video").currentTime > 0,
+      );
+      const video = await page
+        .locator("#event-video")
+        .evaluate((v) => ({ duration: v.duration, width: v.videoWidth }));
+      if (video.duration < 10 || video.width < 100)
+        throw Error("Cloud clip not playable");
+      await page.screenshot({
+        path: "docs/screenshots/cloud.png",
+        fullPage: true,
+      });
+      await page.locator("#close-event").click();
+      await page.goto(origin.href);
+      await page.waitForFunction(
+        () =>
+          document.getElementById("mode-badge").textContent ===
+          "Облачный журнал",
+      );
+      await page.waitForFunction(
+        () => document.getElementById("event-count").textContent === "0",
+      );
+      if (!(await page.locator("#demo-notice").isHidden()))
+        throw Error("Real mode contains demo notice");
+      if (errors.length) throw Error("Cloud UI errors: " + errors.join(", "));
+      console.log(
+        JSON.stringify({
+          cloud_ui: true,
+          playable_saved_clip: video,
+          real_journal_empty: true,
+          uncaught_errors: errors.length,
+        }),
+      );
+    }
   } finally {
     await browser.close();
   }
@@ -261,9 +331,9 @@ if (input.operation === "browser") {
       snapshot_frame_match: true,
     }),
   );
-  if(input.operation==='final'){
-    const retention=await (await post('/api/ops/retention',{})).json();
-    const probes=await (await post('/api/ops/probe-sources',{})).json();
-    console.log(JSON.stringify({retention,probes}));
+  if (input.operation === "final") {
+    const retention = await (await post("/api/ops/retention", {})).json();
+    const probes = await (await post("/api/ops/probe-sources", {})).json();
+    console.log(JSON.stringify({ retention, probes }));
   }
 }

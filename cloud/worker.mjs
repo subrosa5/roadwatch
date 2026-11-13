@@ -8,18 +8,18 @@ import {
 
 // This deployment MUST remain owner-private in Sites. Service requests also
 // require Sites dispatch authorization; the application secret adds a narrow role.
-const TARGET = 3;
+const TARGET = 2;
 const FRAME_LIMIT = 500;
 const STORAGE_LIMIT = 100 * 1024 * 1024;
 const PROBE_PAGES = [
-  { id: "inetcom-entuziastov", url: "https://cameras.inetcom.ru/embed/2" },
-  { id: "inetcom-nosovikhinskoe", url: "https://cameras.inetcom.ru/embed/1" },
-  { id: "tvpodolsk-catalog", url: "https://m.tvpodolsk.ru/city/online/" },
-  { id: "gigavider-catalog", url: "https://gigavider.ru/online/" },
   {
-    id: "gigavider-mkad74-player",
-    url: "https://open.ivideon.com/embed/v3/?server=100-ds658dSzp9k4Udnf7bAlvi&camera=0&lang=ru",
+    id: "iowa-catalog",
+    url: "https://www.arcgis.com/sharing/rest/content/items/c4063f200a7b4da5826e2ac86c677cf5?f=json",
   },
+  ...CAMERA_CONFIG.filter((c) => c.source_kind === "public_hls").map((c) => ({
+    id: c.id,
+    url: c.stream_url,
+  })),
 ];
 const json = (value, status = 200) =>
   new Response(JSON.stringify(value), {
@@ -116,16 +116,20 @@ async function authorize(request, env) {
 async function cameras(env) {
   const cs = await rows(env, "SELECT data FROM rw_cameras");
   return Promise.all(
-    cs.map(async (row) => {
-      const c = JSON.parse(row.data);
-      const o = await first(
-        env,
-        "SELECT data FROM rw_observations WHERE camera_id=? ORDER BY captured_at DESC LIMIT 1",
-        c.id,
-      );
-      const latest = o ? JSON.parse(o.data) : null;
-      return { ...c, health: cameraHealth(c, latest), latest };
-    }),
+    cs
+      .filter((row) =>
+        CAMERA_CONFIG.some((c) => c.id === JSON.parse(row.data).id),
+      )
+      .map(async (row) => {
+        const c = JSON.parse(row.data);
+        const o = await first(
+          env,
+          "SELECT data FROM rw_observations WHERE camera_id=? ORDER BY captured_at DESC LIMIT 1",
+          c.id,
+        );
+        const latest = o ? JSON.parse(o.data) : null;
+        return { ...c, health: cameraHealth(c, latest), latest };
+      }),
   );
 }
 async function init(env) {
@@ -543,9 +547,9 @@ export function createWorker(fetcher = fetch) {
         }
         if (path === "/api/sources" && request.method === "GET")
           return json(
-            (
-              await rows(env, "SELECT data FROM rw_probes ORDER BY source_id")
-            ).map((r) => JSON.parse(r.data)),
+            (await rows(env, "SELECT data FROM rw_probes ORDER BY source_id"))
+              .map((r) => JSON.parse(r.data))
+              .filter((p) => PROBE_PAGES.some((s) => s.id === p.source_id)),
           );
         if (path === "/api/cameras" && request.method === "GET")
           return json(
