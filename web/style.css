@@ -526,6 +526,7 @@ h2 {
   overflow: hidden;
 }
 .viewport > video,
+.viewport > iframe,
 .viewport > img,
 .viewport > canvas {
   position: absolute;
@@ -535,6 +536,13 @@ h2 {
   object-fit: contain;
 }
 .viewport > canvas {
+  pointer-events: none;
+}
+.viewport > iframe {
+  border: 0;
+}
+.public-embed .viewport-top,
+.public-embed .viewport-bottom {
   pointer-events: none;
 }
 .viewport-top,

@@ -1,0 +1,11 @@
+CREATE TABLE rw_cameras (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE rw_observations (camera_id TEXT NOT NULL, frame_id TEXT NOT NULL, captured_at TEXT NOT NULL, day TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(camera_id, frame_id));
+CREATE INDEX rw_observations_recent ON rw_observations(camera_id, captured_at DESC);
+CREATE INDEX rw_observations_day ON rw_observations(day);
+CREATE TABLE rw_events (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL, frame_id TEXT NOT NULL, type TEXT NOT NULL, captured_at TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'unreviewed', demo INTEGER NOT NULL DEFAULT 0, model TEXT NOT NULL, description TEXT NOT NULL, evidence_id TEXT, UNIQUE(camera_id, frame_id, type));
+CREATE INDEX rw_events_recent ON rw_events(demo, captured_at DESC);
+CREATE INDEX rw_events_cooldown ON rw_events(camera_id, type, captured_at DESC);
+CREATE TABLE rw_reviews (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, status TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE rw_evidence (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, object_key TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE rw_snapshots (camera_id TEXT PRIMARY KEY, frame_id TEXT NOT NULL, object_key TEXT NOT NULL, captured_at TEXT NOT NULL);
+CREATE TABLE rw_probes (source_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, data TEXT NOT NULL);

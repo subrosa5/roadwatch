@@ -26,7 +26,7 @@
       </div>
       <nav id="navigation">
         <button data-page="cameras" class="nav active">
-          <span>▦</span>Камеры <b>100<span> цель</span></b></button
+          <span>▦</span>Камеры <b>3<span> пилот</span></b></button
         ><button data-page="events" class="nav">
           <span>◷</span>События <b id="nav-event-count">3</b></button
         ><button data-page="coverage" class="nav"><span>◎</span>Покрытие</button
@@ -41,10 +41,14 @@
         <button id="connect-button" class="text-button">
           Подключить API ↗
         </button>
+        <button id="cloud-button" class="text-button">Облачный журнал ↗</button>
+        <button id="cloud-demo-button" class="text-button">
+          Учебный журнал в облаке ↗
+        </button>
       </div>
       <div class="sidebar-footer">
         <span class="avatar">s</span>
-        <div>subrosa<small>Roadwatch / v0.1</small></div>
+        <div>subrosa<small>Roadwatch / v0.2</small></div>
         <span class="lock">⌑</span>
       </div>
     </aside>
@@ -95,11 +99,11 @@
           <article>
             <div class="metric-label">Подключено камер <span>↗</span></div>
             <div class="metric-value">
-              <span id="connected-count">0</span><small>/ 100</small>
+              <span id="connected-count">0</span><small>/ 3 пилот</small>
             </div>
             <div class="metric-bottom">
               <span class="status-dot gray"></span
-              ><span id="connected-caption">50 минимум · 100 цель</span>
+              ><span id="connected-caption">Сначала 1 камера · затем до 3</span>
             </div>
           </article>
           <article>
@@ -164,7 +168,16 @@
                     id="camera-frame"
                     alt="Последний полученный кадр"
                     hidden
-                  /><canvas id="overlay" aria-label="Рамки детекций"></canvas>
+                  /><iframe
+                    id="camera-embed"
+                    title="Публичный плеер владельца камеры"
+                    hidden
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    sandbox="allow-scripts allow-same-origin allow-presentation"
+                    referrerpolicy="no-referrer"
+                    allowfullscreen
+                  ></iframe
+                  ><canvas id="overlay" aria-label="Рамки детекций"></canvas>
                   <div class="viewport-top">
                     <span class="scene-tag" id="scene-tag">УЧЕБНАЯ СЦЕНА</span
                     ><span id="frame-time"></span>
@@ -259,7 +272,7 @@
           <div class="coverage-layout">
             <article class="panel coverage-map">
               <div class="section-row">
-                <h2>Три зоны наблюдения</h2>
+                <h2>Пилот: качество важнее охвата</h2>
                 <span class="pill">Схема · не карта камер</span>
               </div>
               <svg
@@ -327,22 +340,30 @@
               <h2>План подключения</h2>
               <div class="coverage-zone">
                 <b>01</b>
-                <div>Внутри Садового<small>Минимум 15 · цель 30</small></div>
-                <strong>0 / 30</strong>
+                <div>
+                  Городская дорога<small
+                    >Перекрёсток и видимые траектории</small
+                  >
+                </div>
+                <strong>0 / 1</strong>
               </div>
               <div class="coverage-zone">
                 <b>02</b>
-                <div>ТТК и съезды<small>Минимум 15 · цель 30</small></div>
-                <strong>0 / 30</strong>
+                <div>
+                  Магистраль / съезд<small>Поток машин и остановки</small>
+                </div>
+                <strong>0 / 1</strong>
               </div>
               <div class="coverage-zone">
                 <b>03</b>
-                <div>МКАД<small>Минимум 20 · цель 40</small></div>
-                <strong>0 / 40</strong>
+                <div>
+                  Москва / область<small>Открытый обзор для дыма и огня</small>
+                </div>
+                <strong>0 / 1</strong>
               </div>
               <div class="inline-note">
-                100 точек в каталоге не означают 100 наблюдаемых камер. Счётчик
-                меняется только при поступлении свежих кадров.
+                Рабочий охват увеличивается после замеров. Кандидаты и схема
+                колец не подтверждают доступ к кадрам. Без банковской карты.
               </div>
             </article>
           </div>
@@ -355,13 +376,13 @@
                 Оценка нагрузки. Это не измеренная производительность.
               </p>
               <label class="range-label"
-                >Камеры <output id="camera-output">100</output
+                >Камеры <output id="camera-output">3</output
                 ><input
                   id="capacity-cameras"
                   type="range"
                   min="1"
                   max="100"
-                  value="100" /></label
+                  value="3" /></label
               ><label class="range-label"
                 >Кадров в секунду на камеру <output id="fps-output">1</output
                 ><input
@@ -441,30 +462,43 @@
               </div>
               <div>
                 <span
-                  ><strong>Inetcom · шоссе Энтузиастов</strong
-                  ><small>Москва, Лефортово · кандидат для ТТК</small></span
+                  ><strong>Гигавайдер · Юбилейный / Дружбы</strong
+                  ><small>Химки · публичный плеер владельца</small></span
                 ><span>Не подтверждён</span><span>Нужна проверка</span
                 ><span class="pill warning">Выключен</span>
               </div>
               <div>
                 <span
-                  ><strong>Inetcom · Носовихинское шоссе</strong
-                  ><small>Балашиха · резерв за пределами колец</small></span
+                  ><strong>Гигавайдер · мост Свободы / МКАД</strong
+                  ><small>74 км по каталогу · ракурс проверяется</small></span
                 ><span>Не подтверждён</span><span>Нужна проверка</span
                 ><span class="pill warning">Выключен</span>
               </div>
             </div>
             <div class="inline-note">
-              Следующий этап подключения: штатный доступ к свежему кадру из
-              облака, проверка условий обработки, координат и направления
-              камеры. Закрытые камеры ЦОДД и «Безопасного региона» не
-              подключены.
+              Третий резервный ракурс: Юбилейный проспект, ТЦ «Лига». Плееры
+              опубликованы владельцем:
+              <a
+                href="https://gigavider.ru/online/"
+                target="_blank"
+                rel="noopener noreferrer"
+                >gigavider.ru</a
+              >. Серверное CV и запись не подключены. Preview может быть старым;
+              наличие плеера не подтверждает свежесть кадров или доступ к
+              архиву.
+            </div>
+            <button id="probe-button" class="text-button">
+              Проверить доступность из облака ↗
+            </button>
+            <div id="probe-results" class="inline-note">
+              Проверка веб-страницы не означает проверку видеопотока или запуск
+              CV.
             </div>
           </article>
         </section>
       </main>
       <footer class="main-footer">
-        <span>ROADWATCH / RESEARCH BUILD 0.1</span
+        <span>ROADWATCH / CLOUD BUILD 0.2</span
         ><span>Кандидаты на события требуют проверки человеком</span>
       </footer>
     </div>

@@ -1,0 +1,647 @@
+import {
+  observation,
+  candidates,
+  capacity,
+  cameraHealth,
+  InputError,
+} from "../src/core.mjs";
+
+// This deployment MUST remain owner-private in Sites. Service requests also
+// require Sites dispatch authorization; the application secret adds a narrow role.
+const TARGET = 3;
+const FRAME_LIMIT = 500;
+const STORAGE_LIMIT = 100 * 1024 * 1024;
+const PROBE_PAGES = [
+  { id: "inetcom-entuziastov", url: "https://cameras.inetcom.ru/embed/2" },
+  { id: "inetcom-nosovikhinskoe", url: "https://cameras.inetcom.ru/embed/1" },
+  { id: "tvpodolsk-catalog", url: "https://m.tvpodolsk.ru/city/online/" },
+  { id: "gigavider-catalog", url: "https://gigavider.ru/online/" },
+  {
+    id: "gigavider-mkad74-player",
+    url: "https://open.ivideon.com/embed/v3/?server=100-ds658dSzp9k4Udnf7bAlvi&camera=0&lang=ru",
+  },
+];
+const json = (value, status = 200) =>
+  new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+const fail = (message, status = 400) => {
+  throw new InputError(message, status);
+};
+const stmt = (env, sql, ...args) => env.DB.prepare(sql).bind(...args);
+const rows = async (env, sql, ...args) =>
+  (await stmt(env, sql, ...args).all()).results;
+const first = (env, sql, ...args) => stmt(env, sql, ...args).first();
+const now = () => new Date().toISOString();
+const eventView = (e) => ({
+  ...e,
+  demo: !!e.demo,
+  recording_status: e.evidence_id ? "ready" : "unavailable",
+});
+const sameOrigin = (r) =>
+  !r.headers.get("Origin") || r.headers.get("Origin") === new URL(r.url).origin;
+
+async function bodyBytes(request, limit) {
+  if (Number(request.headers.get("Content-Length") || 0) > limit)
+    fail("Request too large", 413);
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const parts = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > limit) {
+        await reader.cancel();
+        fail("Request too large", 413);
+      }
+      parts.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+async function bodyJSON(request) {
+  try {
+    return JSON.parse(
+      new TextDecoder().decode(await bodyBytes(request, 1024 * 1024)),
+    );
+  } catch (e) {
+    if (e instanceof InputError) throw e;
+    fail("Invalid JSON");
+  }
+}
+async function sha256(bytes) {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("");
+}
+async function secretMatch(value, expected) {
+  if (!expected || expected.length < 32 || !value) return false;
+  const a = await sha256(new TextEncoder().encode(value)),
+    b = await sha256(new TextEncoder().encode(expected));
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+async function authorize(request, env) {
+  const service = await secretMatch(
+    request.headers.get("Authorization")?.replace(/^Bearer /, ""),
+    env.INGEST_TOKEN,
+  );
+  const user = request.headers.get("oai-authenticated-user-id");
+  if (!service && !user) fail("Authentication required", 401);
+  if (
+    request.method !== "GET" &&
+    !service &&
+    (!sameOrigin(request) || request.headers.get("X-Roadwatch-Write") !== "1")
+  )
+    fail("Same-origin write required", 403);
+  return { service, actor: user || "collector" };
+}
+async function cameras(env) {
+  const cs = await rows(env, "SELECT data FROM rw_cameras");
+  return Promise.all(
+    cs.map(async (row) => {
+      const c = JSON.parse(row.data);
+      const o = await first(
+        env,
+        "SELECT data FROM rw_observations WHERE camera_id=? ORDER BY captured_at DESC LIMIT 1",
+        c.id,
+      );
+      const latest = o ? JSON.parse(o.data) : null;
+      return { ...c, health: cameraHealth(c, latest), latest };
+    }),
+  );
+}
+async function init(env) {
+  await env.DB.batch(
+    CAMERA_CONFIG.map((c) =>
+      stmt(
+        env,
+        "INSERT INTO rw_cameras(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+        c.id,
+        JSON.stringify(c),
+      ),
+    ),
+  );
+  return json({
+    initialized: true,
+    target: TARGET,
+    approved_real: CAMERA_CONFIG.filter(
+      (c) => !c.demo && c.approved && c.enabled,
+    ).length,
+  });
+}
+async function ingest(request, env, auth) {
+  if (!auth.service) fail("Collector role required", 403);
+  const raw = await bodyJSON(request);
+  const o = observation(raw);
+  const day = o.captured_at.slice(0, 10);
+  const row = await first(
+    env,
+    "SELECT data FROM rw_cameras WHERE id=?",
+    o.camera_id,
+  );
+  if (!row) fail("Unknown camera", 404);
+  const c = JSON.parse(row.data);
+  if (!c.enabled || !c.approved) fail("Camera not approved/enabled", 403);
+  if (Boolean(raw.demo) !== Boolean(c.demo))
+    fail("Demo provenance mismatch", 403);
+  const previousRow = await first(
+    env,
+    "SELECT data FROM rw_observations WHERE camera_id=? ORDER BY captured_at DESC LIMIT 1",
+    c.id,
+  );
+  const previous = previousRow ? JSON.parse(previousRow.data) : null;
+  const duplicate = await first(
+    env,
+    "SELECT frame_id FROM rw_observations WHERE camera_id=? AND frame_id=?",
+    c.id,
+    o.frame_id,
+  );
+  if (duplicate) return json({ duplicate: true, events: [] });
+  if (previous && o.captured_at <= previous.captured_at)
+    fail("Out-of-order frame", 409);
+  const eventTypes = candidates(o, previous);
+  const commands = [
+    stmt(
+      env,
+      `INSERT OR IGNORE INTO rw_observations(camera_id,frame_id,captured_at,day,data)
+    SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM rw_observations WHERE day=?)<?
+    AND COALESCE((SELECT MAX(captured_at) FROM rw_observations WHERE camera_id=?),'')=?`,
+      c.id,
+      o.frame_id,
+      o.captured_at,
+      day,
+      JSON.stringify(o),
+      day,
+      FRAME_LIMIT,
+      c.id,
+      previous?.captured_at || "",
+    ),
+  ];
+  const ids = [];
+  for (const type of eventTypes) {
+    const id = crypto.randomUUID();
+    ids.push(id);
+    commands.push(
+      stmt(
+        env,
+        `INSERT OR IGNORE INTO rw_events(id,camera_id,frame_id,type,captured_at,created_at,demo,model,description)
+    SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rw_observations WHERE camera_id=? AND frame_id=?)
+    AND NOT EXISTS(SELECT 1 FROM rw_events WHERE camera_id=? AND type=? AND captured_at>?)`,
+        id,
+        c.id,
+        o.frame_id,
+        type,
+        o.captured_at,
+        now(),
+        c.demo ? 1 : 0,
+        o.model,
+        c.demo
+          ? "Синтетическая проверка облачного API. Не реальное происшествие."
+          : "Признаки на двух кадрах. Требуется проверка человеком.",
+        c.id,
+        o.frame_id,
+        c.id,
+        type,
+        new Date(Date.parse(o.captured_at) - 120000).toISOString(),
+      ),
+    );
+  }
+  const result = await env.DB.batch(commands);
+  if (!result[0].meta.changes) {
+    const count = await first(
+      env,
+      "SELECT COUNT(*) AS n FROM rw_observations WHERE day=?",
+      day,
+    );
+    fail(
+      count.n >= FRAME_LIMIT
+        ? "Daily frame quota reached"
+        : "Concurrent frame; retry with fresh input",
+      count.n >= FRAME_LIMIT ? 429 : 409,
+    );
+  }
+  const created = [];
+  for (const id of ids) {
+    const event = await first(env, "SELECT * FROM rw_events WHERE id=?", id);
+    if (event) created.push(eventView(event));
+  }
+  return json({ accepted: true, events: created }, 201);
+}
+async function frame(request, env, id, auth) {
+  const current = await first(
+    env,
+    "SELECT data FROM rw_observations WHERE camera_id=? ORDER BY captured_at DESC LIMIT 1",
+    id,
+  );
+  if (!current) fail("No observation", 404);
+  const o = JSON.parse(current.data);
+  if (request.method === "POST") {
+    if (!auth.service) fail("Collector role required", 403);
+    if (request.headers.get("X-Frame-ID") !== o.frame_id)
+      fail("Frame ID mismatch", 409);
+    const bytes = await bodyBytes(request, 2 * 1024 * 1024);
+    if (bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255)
+      fail("JPEG required");
+    const key = "frames/" + id + "/" + crypto.randomUUID() + ".jpg";
+    await env.BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: "image/jpeg" },
+    });
+    const old = await first(
+      env,
+      "SELECT object_key FROM rw_snapshots WHERE camera_id=?",
+      id,
+    );
+    try {
+      await stmt(
+        env,
+        `INSERT INTO rw_snapshots(camera_id,frame_id,object_key,captured_at) VALUES(?,?,?,?) ON CONFLICT(camera_id) DO UPDATE SET frame_id=excluded.frame_id,object_key=excluded.object_key,captured_at=excluded.captured_at WHERE excluded.captured_at>=rw_snapshots.captured_at`,
+        id,
+        o.frame_id,
+        key,
+        o.captured_at,
+      ).run();
+    } catch (e) {
+      await env.BUCKET.delete(key);
+      throw e;
+    }
+    const stored = await first(
+      env,
+      "SELECT object_key FROM rw_snapshots WHERE camera_id=?",
+      id,
+    );
+    if (stored.object_key !== key) {
+      await env.BUCKET.delete(key);
+      fail("Newer snapshot already stored", 409);
+    }
+    if (old && old.object_key !== key) await env.BUCKET.delete(old.object_key);
+    return json({ stored: true, frame_id: o.frame_id });
+  }
+  const f = await first(
+    env,
+    "SELECT * FROM rw_snapshots WHERE camera_id=?",
+    id,
+  );
+  if (!f) fail("No snapshot", 404);
+  const object = await env.BUCKET.get(f.object_key);
+  if (!object) fail("Snapshot unavailable", 404);
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "no-store",
+      "X-Frame-ID": f.frame_id,
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+async function uploadEvidence(request, env, eventId, auth) {
+  if (!auth.service) fail("Collector role required", 403);
+  const event = await first(
+    env,
+    "SELECT id FROM rw_events WHERE id=?",
+    eventId,
+  );
+  if (!event) fail("Event not found", 404);
+  const bytes = await bodyBytes(request, 25 * 1024 * 1024);
+  if (new TextDecoder().decode(bytes.slice(4, 8)) !== "ftyp")
+    fail("MP4 required");
+  const hash = await sha256(bytes),
+    id = crypto.randomUUID(),
+    key = "evidence/" + id + ".mp4";
+  const reservation = await stmt(
+    env,
+    `INSERT INTO rw_evidence(id,event_id,object_key,bytes,sha256,state,created_at)
+    SELECT ?,?,?,?,?,'uploading',? WHERE COALESCE((SELECT SUM(bytes) FROM rw_evidence WHERE state IN ('ready','uploading')),0)+?<=?`,
+    id,
+    eventId,
+    key,
+    bytes.length,
+    hash,
+    now(),
+    bytes.length,
+    STORAGE_LIMIT,
+  ).run();
+  if (!reservation.meta.changes) fail("Evidence storage budget reached", 507);
+  try {
+    await env.BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: "video/mp4" },
+    });
+    await env.DB.batch([
+      stmt(env, "UPDATE rw_evidence SET state='ready' WHERE id=?", id),
+      stmt(env, "UPDATE rw_events SET evidence_id=? WHERE id=?", id, eventId),
+    ]);
+  } catch (e) {
+    await env.BUCKET.delete(key);
+    await stmt(env, "DELETE FROM rw_evidence WHERE id=?", id).run();
+    throw e;
+  }
+  return json({ id, sha256: hash, bytes: bytes.length }, 201);
+}
+async function evidence(request, env, id) {
+  const e = await first(
+    env,
+    "SELECT * FROM rw_evidence WHERE id=? AND state='ready'",
+    id,
+  );
+  if (!e) fail("Evidence unavailable", 404);
+  const range = request.headers.get("Range");
+  let offset = 0,
+    length = e.bytes,
+    status = 200;
+  if (range) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!m || (!m[1] && !m[2]))
+      return new Response(null, {
+        status: 416,
+        headers: { "Content-Range": "bytes */" + e.bytes },
+      });
+    if (!m[1]) {
+      length = Math.min(Number(m[2]), e.bytes);
+      offset = e.bytes - length;
+    } else {
+      offset = Number(m[1]);
+      length =
+        (m[2] ? Math.min(Number(m[2]), e.bytes - 1) : e.bytes - 1) - offset + 1;
+    }
+    if (offset >= e.bytes || length <= 0)
+      return new Response(null, {
+        status: 416,
+        headers: { "Content-Range": "bytes */" + e.bytes },
+      });
+    status = 206;
+  }
+  const object = await env.BUCKET.get(
+    e.object_key,
+    range ? { range: { offset, length } } : undefined,
+  );
+  if (!object) fail("Evidence file unavailable", 404);
+  const headers = {
+    "Content-Type": "video/mp4",
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(length),
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Content-SHA256": e.sha256,
+  };
+  if (range)
+    headers["Content-Range"] =
+      `bytes ${offset}-${offset + length - 1}/${e.bytes}`;
+  return new Response(object.body, { status, headers });
+}
+async function probe(env, fetcher) {
+  const results = await Promise.all(
+    PROBE_PAGES.map(async (source) => {
+      const checked_at = now();
+      let result;
+      try {
+        const response = await fetcher(source.url, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(8000),
+          headers: { "User-Agent": "Roadwatch/0.2 source-availability-check" },
+        });
+        const data = await bodyBytes(response, 256 * 1024);
+        const html = new TextDecoder().decode(data);
+        result = {
+          source_id: source.id,
+          url: source.url,
+          checked_at,
+          http_status: response.status,
+          reachable: response.ok,
+          bytes: data.length,
+          title: (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] || "").slice(
+            0,
+            120,
+          ),
+          stream_verified: false,
+          analysis_enabled: false,
+        };
+      } catch (error) {
+        result = {
+          source_id: source.id,
+          url: source.url,
+          checked_at,
+          reachable: false,
+          error: error.name === "TimeoutError" ? "timeout" : "fetch_failed",
+          stream_verified: false,
+          analysis_enabled: false,
+        };
+      }
+      await stmt(
+        env,
+        "INSERT INTO rw_probes(source_id,checked_at,data) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET checked_at=excluded.checked_at,data=excluded.data",
+        source.id,
+        checked_at,
+        JSON.stringify(result),
+      ).run();
+      return result;
+    }),
+  );
+  return json(results);
+}
+async function retention(env) {
+  const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
+  const expired = await rows(
+    env,
+    "SELECT id,object_key FROM rw_evidence WHERE created_at<? AND state IN ('ready','uploading') ORDER BY created_at LIMIT 100",
+    cutoff,
+  );
+  for (const e of expired) {
+    await env.BUCKET.delete(e.object_key);
+    await env.DB.batch([
+      stmt(
+        env,
+        "UPDATE rw_events SET evidence_id=NULL WHERE evidence_id=?",
+        e.id,
+      ),
+      stmt(env, "UPDATE rw_evidence SET state='expired' WHERE id=?", e.id),
+    ]);
+  }
+  const old = new Date(Date.now() - 86400000).toISOString();
+  const pruned = await stmt(
+    env,
+    "DELETE FROM rw_observations WHERE rowid IN (SELECT rowid FROM rw_observations WHERE captured_at<? LIMIT 500)",
+    old,
+  ).run();
+  const snapshots = await rows(
+    env,
+    "SELECT camera_id,object_key FROM rw_snapshots WHERE captured_at<? LIMIT 20",
+    old,
+  );
+  for (const f of snapshots) {
+    await env.BUCKET.delete(f.object_key);
+    await stmt(
+      env,
+      "DELETE FROM rw_snapshots WHERE camera_id=? AND object_key=?",
+      f.camera_id,
+      f.object_key,
+    ).run();
+  }
+  return json({
+    expired_clips: expired.length,
+    pruned_observations: pruned.meta.changes,
+    expired_snapshots: snapshots.length,
+    automatic_schedule: false,
+  });
+}
+export function createWorker(fetcher = fetch) {
+  return {
+    async fetch(request, env) {
+      try {
+        const u = new URL(request.url),
+          path = u.pathname;
+        if (!path.startsWith("/api/")) return serveAsset(path, request);
+        if (path === "/api/health" && request.method === "GET")
+          return json({
+            version: "0.2.0",
+            mode: "cloud",
+            backend: "Sites D1/R2",
+            target_cameras: TARGET,
+            monitoring: false,
+          });
+        const auth = await authorize(request, env);
+        if (!env.DB || !env.BUCKET) fail("Storage bindings unavailable", 503);
+        if (path === "/api/ops/init" && request.method === "POST")
+          return await init(env);
+        if (path === "/api/ops/probe-sources" && request.method === "POST")
+          return await probe(env, fetcher);
+        if (path === "/api/ops/retention" && request.method === "POST")
+          return await retention(env);
+        if (path === "/api/ops/source-document" && request.method === "GET") {
+          if (!auth.service) fail("Collector role required", 403);
+          const source = PROBE_PAGES.find(
+            (p) => p.id === u.searchParams.get("source_id"),
+          );
+          if (!source) fail("Unknown source", 404);
+          const response = await fetcher(source.url, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(8000),
+          });
+          return json({
+            source_id: source.id,
+            status: response.status,
+            html: new TextDecoder().decode(
+              await bodyBytes(response, 256 * 1024),
+            ),
+          });
+        }
+        if (path === "/api/sources" && request.method === "GET")
+          return json(
+            (
+              await rows(env, "SELECT data FROM rw_probes ORDER BY source_id")
+            ).map((r) => JSON.parse(r.data)),
+          );
+        if (path === "/api/cameras" && request.method === "GET")
+          return json(
+            (await cameras(env)).filter(
+              (c) =>
+                c.demo === (u.searchParams.get("demo") === "1") &&
+                c.pilot !== false,
+            ),
+          );
+        if (path === "/api/stats" && request.method === "GET") {
+          const cs = await cameras(env),
+            usage = await first(
+              env,
+              "SELECT COUNT(*) AS n FROM rw_observations WHERE day=?",
+              now().slice(0, 10),
+            );
+          return json({
+            mode: u.searchParams.get("demo") === "1" ? "demo" : "cloud",
+            receiving_real: cs.filter(
+              (c) => !c.demo && c.health === "receiving",
+            ).length,
+            target: TARGET,
+            daily_frames: usage.n,
+            daily_frame_limit: FRAME_LIMIT,
+            monitoring: false,
+            model_ready: false,
+          });
+        }
+        if (path === "/api/capacity" && request.method === "GET")
+          return json(capacity({ cameras: TARGET, fps: 0.2 }));
+        if (path === "/api/events" && request.method === "GET")
+          return json(
+            (
+              await rows(
+                env,
+                "SELECT * FROM rw_events WHERE demo=? ORDER BY captured_at DESC LIMIT 100",
+                u.searchParams.get("demo") === "1" ? 1 : 0,
+              )
+            ).map(eventView),
+          );
+        if (path === "/api/observations" && request.method === "POST")
+          return await ingest(request, env, auth);
+        let match = path.match(/^\/api\/cameras\/([a-z0-9-]{1,80})\/frame$/);
+        if (match && ["GET", "POST"].includes(request.method))
+          return await frame(request, env, match[1], auth);
+        match = path.match(/^\/api\/events\/([a-zA-Z0-9-]{1,80})\/evidence$/);
+        if (match && request.method === "POST")
+          return await uploadEvidence(request, env, match[1], auth);
+        match = path.match(/^\/api\/evidence\/([a-zA-Z0-9-]{1,80})$/);
+        if (match && request.method === "GET")
+          return await evidence(request, env, match[1]);
+        match = path.match(/^\/api\/events\/([a-zA-Z0-9-]{1,80})\/review$/);
+        if (match && request.method === "POST") {
+          const { status } = await bodyJSON(request);
+          if (!["confirmed", "dismissed", "unreviewed"].includes(status))
+            fail("Invalid review status");
+          if (
+            !(await first(env, "SELECT id FROM rw_events WHERE id=?", match[1]))
+          )
+            fail("Event not found", 404);
+          await env.DB.batch([
+            stmt(
+              env,
+              "INSERT INTO rw_reviews VALUES(?,?,?,?,?)",
+              crypto.randomUUID(),
+              match[1],
+              status,
+              auth.actor,
+              now(),
+            ),
+            stmt(
+              env,
+              "UPDATE rw_events SET status=? WHERE id=?",
+              status,
+              match[1],
+            ),
+          ]);
+          return json(
+            eventView(
+              await first(env, "SELECT * FROM rw_events WHERE id=?", match[1]),
+            ),
+          );
+        }
+        fail("Not found", 404);
+      } catch (error) {
+        return json(
+          {
+            error:
+              error instanceof InputError
+                ? error.message
+                : "Service operation failed",
+          },
+          error instanceof InputError ? error.status : 500,
+        );
+      }
+    },
+  };
+}
+export default createWorker();

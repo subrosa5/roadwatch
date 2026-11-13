@@ -84,8 +84,10 @@ class Detector:
 
 
 class Api:
-    def __init__(self, base, token):
+    def __init__(self, base, token, sites_token=None):
         parsed = urlparse(base)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("API URL must not contain credentials, query or fragment")
         if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
             raise ValueError("API must use HTTPS (except local development)")
         if not token or len(token) < 32:
@@ -93,9 +95,15 @@ class Api:
         self.base = base.rstrip("/")
         self.session = requests.Session()
         self.session.headers["Authorization"] = "Bearer " + token
+        if sites_token:
+            if parsed.scheme != "https" or not parsed.hostname.endswith(".chatgpt.site"):
+                raise ValueError("Sites service token requires a Sites HTTPS origin")
+            self.session.headers["OAI-Sites-Authorization"] = "Bearer " + sites_token
 
     def post(self, path, **kwargs):
-        response = self.session.post(self.base + path, timeout=20, **kwargs)
+        response = self.session.post(self.base + path, timeout=20, allow_redirects=False, **kwargs)
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("Collector stopped: API redirect is not allowed")
         if response.status_code in {401, 403, 429, 507}:
             raise RuntimeError(f"Collector stopped: API status {response.status_code}")
         response.raise_for_status()
@@ -233,7 +241,7 @@ async def main(config_path):
     if not enabled:
         raise ValueError("No approved sources enabled")
     detector = Detector(config["models"])
-    api = Api(config["api_url"], os.environ.get("INGEST_TOKEN", ""))
+    api = Api(config["api_url"], os.environ.get("INGEST_TOKEN", ""), os.environ.get("SITES_SERVICE_TOKEN"))
     root = Path(config["buffer_root"])
     root.mkdir(parents=True,exist_ok=True)
     ledger = root / "cpu-budget.json"

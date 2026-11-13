@@ -17,9 +17,23 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
-from collector.collector import Detector, recording_command, evidence
+from collector.collector import Api as CollectorApi, Detector, recording_command, evidence
 
 class CollectorTests(unittest.TestCase):
+    def test_sites_credentials_stay_on_expected_https_origin_and_no_redirects(self):
+        with self.assertRaises(ValueError):
+            CollectorApi('https://example.org','a'*64,'service-secret')
+        with self.assertRaises(ValueError):
+            CollectorApi('https://user:password@example.org','a'*64)
+        api=CollectorApi('https://example.chatgpt.site','a'*64,'service-secret')
+        self.assertEqual(api.session.headers['OAI-Sites-Authorization'],'Bearer service-secret')
+        class Redirect:
+            status_code=302
+        with patch.object(api.session,'post',return_value=Redirect()) as post:
+            with self.assertRaisesRegex(RuntimeError,'redirect'):
+                api.post('/api/observations',json={})
+            self.assertFalse(post.call_args.kwargs['allow_redirects'])
+
     def test_weights_hash_rejected_before_loading(self):
         with tempfile.TemporaryDirectory() as directory:
             file=Path(directory)/'model.onnx';file.write_bytes(b'not a trained model')

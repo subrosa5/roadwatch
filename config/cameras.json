@@ -8,7 +8,8 @@
     "demo": true,
     "latitude": null,
     "longitude": null,
-    "location_note": "Синтетическая сцена, не трансляция Москвы"
+    "location_note": "Синтетическая сцена, не трансляция Москвы",
+    "kind": "collision"
   },
   {
     "id": "demo-ttk",
@@ -19,7 +20,8 @@
     "demo": true,
     "latitude": null,
     "longitude": null,
-    "location_note": "Синтетическая сцена, не трансляция Москвы"
+    "location_note": "Синтетическая сцена, не трансляция Москвы",
+    "kind": "smoke"
   },
   {
     "id": "demo-mkad",
@@ -30,7 +32,8 @@
     "demo": true,
     "latitude": null,
     "longitude": null,
-    "location_note": "Синтетическая сцена, не трансляция Москвы"
+    "location_note": "Синтетическая сцена, не трансляция Москвы",
+    "kind": "fire"
   },
   {
     "id": "moscow-entuziastov",
@@ -42,7 +45,8 @@
     "latitude": null,
     "longitude": null,
     "source_page": "https://www.geocam.ru/online/entuziastov/",
-    "location_note": "Направление камеры и координаты не проверены; сайт владельца недоступен при проверке"
+    "location_note": "Направление камеры и координаты не проверены; сайт владельца недоступен при проверке",
+    "pilot": false
   },
   {
     "id": "balashikha-nosovikhinskoe",
@@ -54,6 +58,65 @@
     "latitude": null,
     "longitude": null,
     "source_page": "https://www.geocam.ru/online/nosovikhinskoe-shosse/",
-    "location_note": "Жилгородок, 9А по каталогу; не входит в основную раскладку колец"
+    "location_note": "Жилгородок, 9А по каталогу; кандидат пилота области, кадры не проверены",
+    "pilot": false
+  },
+  {
+    "id": "podolsk-road-candidate",
+    "name": "Подольск · резерв источника",
+    "zone": "oblast",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "latitude": null,
+    "longitude": null,
+    "source_page": "https://m.tvpodolsk.ru/city/online/",
+    "location_note": "Каталог владельца. Дорожный ракурс и условия использования ещё не подтверждены",
+    "pilot": false
+  },
+  {
+    "id": "khimki-druzhby",
+    "name": "Химки · Юбилейный / Дружбы",
+    "zone": "oblast",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "pilot": true,
+    "latitude": null,
+    "longitude": null,
+    "source_kind": "public_embed",
+    "source_page": "https://gigavider.ru/online/",
+    "embed_url": "https://open.ivideon.com/embed/v3/?server=100-wikEvz9uGyOTLNX3WulqeW&camera=0&lang=ru",
+    "location_note": "Круговое движение. Ракурс и свежесть видеопотока ещё проверяются."
+  },
+  {
+    "id": "khimki-mkad74",
+    "name": "МКАД 74 км · мост Свободы",
+    "zone": "mkad",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "pilot": true,
+    "latitude": null,
+    "longitude": null,
+    "source_kind": "public_embed",
+    "source_page": "https://gigavider.ru/online/",
+    "embed_url": "https://open.ivideon.com/embed/v3/?server=100-ds658dSzp9k4Udnf7bAlvi&camera=0&lang=ru",
+    "location_note": "Название из каталога владельца. Координаты и соответствие ракурса не подтверждены."
+  },
+  {
+    "id": "khimki-liga",
+    "name": "Химки · Юбилейный, ТЦ «Лига»",
+    "zone": "oblast",
+    "enabled": false,
+    "approved": false,
+    "demo": false,
+    "pilot": true,
+    "latitude": null,
+    "longitude": null,
+    "source_kind": "public_embed",
+    "source_page": "https://gigavider.ru/online/",
+    "embed_url": "https://open.ivideon.com/embed/v3/?server=100-wlbzm95kSGNXrPGUwV1paI&camera=0&lang=ru",
+    "location_note": "Резервный ракурс пилота; пригодность для дыма и дорожных событий не подтверждена."
   }
 ]

@@ -13,7 +13,7 @@ async function walk(dir) {
     }
   }
 }
-for (const dir of ["src", "web", "tools", "tests"]) await walk(dir);
+for (const dir of ["src", "cloud", "web", "tools", "tests"]) await walk(dir);
 for (const path of ["config/cameras.json", "config/collector.example.json"])
   JSON.parse(await readFile(path, "utf8"));
 console.log("JavaScript syntax and JSON configuration valid");

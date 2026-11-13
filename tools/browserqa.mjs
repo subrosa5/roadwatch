@@ -68,7 +68,7 @@ try {
   await page.locator('[data-camera="demo-mkad"]').click();
   assert.match(await page.locator("#camera-name").textContent(), /МКАД/);
   await page.locator('[data-page="capacity"]').click();
-  assert.match(await page.locator("#capacity-hours").textContent(), /3.*600/);
+  assert.match(await page.locator("#capacity-hours").textContent(), /108/);
   await page.locator("#capacity-fps").fill("0");
   await page.locator("#capacity-fps").dispatchEvent("input");
   assert.match(

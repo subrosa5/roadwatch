@@ -1,4 +1,6 @@
 const $ = (id) => document.getElementById(id);
+let hosted = false;
+const cloudDemo = new URLSearchParams(location.search).has("cloud-demo");
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -127,7 +129,7 @@ function setPage(value) {
   $("page-subtitle").textContent = {
     cameras: "Камеры, признаки происшествий и записи — в одном окне.",
     events: "События, статусы проверки и доступные видеосвидетельства.",
-    coverage: "50 камер минимум · 100 цель · три зоны Москвы.",
+    coverage: "Пилот до 3 камер · число источников определяется замерами.",
     capacity: "Сопоставление нагрузки и бесплатных облачных квот.",
     sources: "Доступность, направление обзора и геопривязка.",
   }[value];
@@ -168,7 +170,7 @@ function renderPicker() {
     visible
       .map(
         (c) =>
-          `<button class="camera-choice ${selected?.id === c.id ? "selected" : ""}" data-camera="${esc(c.id)}"><div class="camera-thumb">${c.demo ? `<video src="./clips/${esc(c.kind || "collision")}.mp4" muted playsinline preload="metadata"></video>` : ""}<span>${c.demo ? "SYNTHETIC" : esc(c.health === "receiving" ? "КАДРЫ ПОСТУПАЮТ" : "НЕТ СВЕЖИХ КАДРОВ")}</span></div><strong>${esc(c.name)}</strong><small>${c.demo ? "Учебное видео · не Москва" : esc(c.location_note || "Геопривязка не проверена")}</small></button>`,
+          `<button class="camera-choice ${selected?.id === c.id ? "selected" : ""}" data-camera="${esc(c.id)}"><div class="camera-thumb">${c.demo ? `<video src="./clips/${esc(c.kind || "collision")}.mp4" muted playsinline preload="metadata"></video>` : ""}<span>${c.demo ? "SYNTHETIC" : c.embed_url ? "ПУБЛИЧНЫЙ ПЛЕЕР · БЕЗ CV" : esc(c.health === "receiving" ? "КАДРЫ ПОСТУПАЮТ" : "НЕТ СВЕЖИХ КАДРОВ")}</span></div><strong>${esc(c.name)}</strong><small>${c.demo ? "Учебное видео · не Москва" : esc(c.location_note || "Геопривязка не проверена")}</small></button>`,
       )
       .join("") || '<div class="empty">В этой зоне пока нет камер</div>';
   $("scene-count").textContent =
@@ -182,9 +184,27 @@ async function selectCamera(id) {
   renderPicker();
   $("camera-name").textContent = selected.name;
   const demo = mode === "demo";
+  let embed = null;
+  if (!demo && selected.embed_url) {
+    try {
+      const u = new URL(selected.embed_url);
+      if (
+        u.protocol === "https:" &&
+        u.hostname === "open.ivideon.com" &&
+        u.pathname === "/embed/v3/"
+      )
+        embed = u.href;
+    } catch {}
+  }
+  const embedNode = $("camera-embed");
+  embedNode.hidden = !embed;
+  $("viewport").classList.toggle("public-embed", !!embed);
+  if (embed) {
+    if (embedNode.src !== embed) embedNode.src = embed;
+  } else embedNode.removeAttribute("src");
   $("camera-video").hidden = !demo;
-  $("camera-frame").hidden = demo;
-  $("video-unavailable").hidden = demo;
+  $("camera-frame").hidden = demo || !!embed;
+  $("video-unavailable").hidden = demo || !!embed;
   $("pause-button").hidden = !demo;
   $("scene-tag").textContent = demo
     ? "УЧЕБНАЯ СЦЕНА"
@@ -216,12 +236,28 @@ async function selectCamera(id) {
       .play()
       .catch(() => {});
     $("pause-button").textContent = "Ⅱ";
+  } else if (embed) {
+    $("scene-tag").textContent = "ПЛЕЕР ВЛАДЕЛЬЦА";
+    $("video-label").textContent = "PUBLIC EMBED · CV НЕ ПОДКЛЮЧЁН";
+    $("model-name").textContent = "СЕРВЕРНЫЙ АНАЛИЗ НЕ ЗАПУЩЕН";
+    $("analysis-note").textContent =
+      "Встроенный публичный плеер оператора. Свежесть видео и архив не подтверждены. Рамки не рисуются, события автоматически не создаются.";
   } else await refreshFrame();
 }
 async function request(path, options = {}) {
+  if (
+    hosted &&
+    cloudDemo &&
+    ["/api/cameras", "/api/events", "/api/stats"].includes(path)
+  )
+    path += "?demo=1";
   const response = await fetch(api + path, {
     ...options,
-    headers: { Authorization: "Bearer " + token, ...options.headers },
+    headers: {
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+      ...(hosted ? { "X-Roadwatch-Write": "1" } : {}),
+      ...options.headers,
+    },
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) {
@@ -636,7 +672,58 @@ $("connect-form").onsubmit = async (e) => {
     $("connect-error").textContent = error.message;
   }
 };
-$("demo-mode-button").onclick = () => location.reload();
+$("demo-mode-button").onclick = () => {
+  location.search = "?demo=1";
+};
+async function cloudConnect() {
+  const h = await fetch("/api/health").then((r) => r.json());
+  if (h.backend !== "Sites D1/R2")
+    throw new Error("Облачный backend недоступен");
+  hosted = true;
+  api = "";
+  token = "";
+  mode = "api";
+  events = [];
+  $("mode-badge").textContent = cloudDemo
+    ? "Учебный облачный API"
+    : "Облачный журнал";
+  $("mode-badge").classList.toggle("real", !cloudDemo);
+  $("demo-notice").hidden = !cloudDemo;
+  $("simulate-button").hidden = true;
+  await refresh();
+  await showProbes();
+}
+async function showProbes() {
+  if (!hosted) return;
+  const data = await request("/api/sources").then((r) => r.json());
+  $("probe-results").textContent = data.length
+    ? data
+        .map(
+          (p) =>
+            `${p.source_id}: ${p.reachable ? "страница отвечает (HTTP " + p.http_status + ")" : p.error || "HTTP " + p.http_status} · ${dateTime(p.checked_at)} МСК · видеопоток не проверен`,
+        )
+        .join(" | ")
+    : "Облачная проверка ещё не запускалась. Видеопотоки не подтверждены.";
+}
+$("cloud-button").onclick = () => {
+  location.search = "";
+  cloudConnect().catch((e) => toast(e.message));
+};
+$("cloud-demo-button").onclick = () => {
+  location.search = "?cloud-demo=1";
+};
+$("probe-button").onclick = async () => {
+  if (!hosted) return toast("Сначала откройте облачный журнал");
+  $("probe-button").disabled = true;
+  try {
+    await request("/api/ops/probe-sources", { method: "POST" });
+    await showProbes();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    $("probe-button").disabled = false;
+  }
+};
 document
   .querySelectorAll("#page-capacity input")
   .forEach((el) => el.addEventListener("input", calculate));
@@ -653,3 +740,27 @@ renderPicker();
 selectCamera(selected.id);
 calculate();
 draw();
+if (!new URLSearchParams(location.search).has("demo"))
+  cloudConnect().catch((error) => {
+    if (!globalThis.ROADWATCH_CLOUD_HOSTED) return;
+    mode = "api";
+    events = [];
+    cameras = [];
+    selected = null;
+    renderEvents();
+    renderPicker();
+    $("camera-video").pause();
+    $("camera-video").hidden = true;
+    $("camera-frame").hidden = true;
+    $("camera-embed").hidden = true;
+    $("mode-badge").textContent = "Нет связи";
+    $("connected-count").textContent = "—";
+    $("monitor-mode").textContent = "Нет связи";
+    $("simulate-button").hidden = true;
+    $("demo-notice").hidden = true;
+    $("connection-error").textContent =
+      "Облачный API недоступен: " +
+      error.message +
+      ". Наблюдение не подтверждено.";
+    $("connection-error").hidden = false;
+  });
