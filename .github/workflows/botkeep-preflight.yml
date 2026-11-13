@@ -1,0 +1,25 @@
+name: Botkeep resource preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: botkeep-preflight
+  cancel-in-progress: true
+jobs:
+  linux-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Publication logic
+        run: python3 tools/test_publisher.py
+      - name: Build portable probe
+        run: docker build -f collector/botkeep/Dockerfile.preflight -t roadwatch-probe .
+      - name: Decode one public frame and benchmark within free-host limits
+        run: >-
+          docker run --rm --cpus=0.5 --memory=512m --memory-swap=512m
+          --pids-limit=64 --read-only
+          --tmpfs /tmp:rw,size=64m
+          --tmpfs /app/data:rw,size=128m,uid=10001,gid=10001,mode=0700
+          roadwatch-probe

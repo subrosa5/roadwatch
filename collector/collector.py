@@ -20,6 +20,11 @@ import cv2
 import numpy as np
 import requests
 
+try:
+    from .publisher import Publisher
+except ImportError:
+    from publisher import Publisher
+
 LABELS = {"vehicle", "collision", "smoke", "fire"}
 
 
@@ -111,7 +116,7 @@ class Api:
 
 
 def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
-    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-rw_timeout", "10000000", "-i", url,
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-rw_timeout", "10000000", "-threads", "1", "-i", url,
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "segment", "-segment_time", "2",
             "-segment_list", str(directory / "segments.csv"), "-segment_list_size", "30", "-segment_wrap", "30",
             "-segment_format", "mpegts", str(directory / "segment-%03d.ts"),
@@ -148,7 +153,7 @@ async def evidence(event, directory, api, ffmpeg, pre, post):
         manifest = target / "concat.txt"
         manifest.write_text("".join(f"file '{p.name}'\n" for p in sorted(copies.values())))
         output = target / "evidence.mp4"
-        process = await asyncio.create_subprocess_exec(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1", "-i", str(manifest), "-an", "-vf", "scale=960:-2,fps=10", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-t", str(pre + post + 8), "-movflags", "+faststart", str(output), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        process = await asyncio.create_subprocess_exec(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1", "-i", str(manifest), "-an", "-c:v", "copy", "-t", str(pre + post + 8), "-movflags", "+faststart", str(output), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         try:
             await asyncio.wait_for(process.wait(), timeout=90)
         except asyncio.TimeoutError:
@@ -178,10 +183,14 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     ffmpeg = settings.get("ffmpeg", "ffmpeg")
     process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     last_hash = None
+    publisher = Publisher(api, directory / "publication.json",
+                          settings.get("heartbeat_seconds", 900),
+                          settings.get("daily_publication_limit", 400),
+                          settings.get("daily_clip_limit", 5))
     clips = set()
     try:
         while process.returncode is None:
-            await asyncio.sleep(1 / fps)
+            await asyncio.sleep(min(.5, 1 / fps))
             for task in list(clips):
                 if task.done():
                     clips.remove(task)
@@ -215,12 +224,11 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 temporary.replace(ledger)
             captured_at = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
             data = {"camera_id": camera["id"], "frame_id": frame_hash, "captured_at": captured_at, "detections": detections, "model": settings["model_version"], "clock": "collector_arrival"}
-            result = await asyncio.to_thread(api.post, "/api/observations", json=data)
-            await asyncio.to_thread(api.post, f'/api/cameras/{camera["id"]}/frame', data=jpeg, headers={"Content-Type": "image/jpeg", "X-Frame-ID": frame_hash})
-            for event in result["events"]:
+            admitted = await asyncio.to_thread(publisher.handle, data, jpeg)
+            for event in admitted:
                 task = asyncio.create_task(evidence(event, directory, api, ffmpeg, settings.get("pre_seconds", 10), settings.get("post_seconds", 10)))
                 clips.add(task)
-            print(json.dumps({"camera": camera["id"], "frame_id": frame_hash, "detections": len(detections), "new_events": len(result["events"])}))
+            print(json.dumps({"camera": camera["id"], "frame_id": frame_hash, "detections": len(detections), "new_events": len(admitted)}))
         raise RuntimeError("Stream recorder exited; source unavailable")
     finally:
         if process.returncode is None:

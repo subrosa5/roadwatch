@@ -1,0 +1,20 @@
+{
+  "approved_for_cloud_run": true,
+  "api_url": "https://roadwatch-moscow-console.dealreal259.chatgpt.site",
+  "buffer_root": "data/ring",
+  "fps": 0.2,
+  "pre_seconds": 10,
+  "post_seconds": 10,
+  "daily_inference_cpu_seconds": 21600,
+  "heartbeat_seconds": 900,
+  "daily_publication_limit": 400,
+  "daily_clip_limit": 5,
+  "model_version": "cctv-ai-fire-smoke-343990e4-onnx",
+  "models": [],
+  "cameras": [{
+    "id": "iowa-cbtv51",
+    "enabled": true,
+    "approved": true,
+    "stream_url": "https://video2.iowadot.gov:8888/councilbluffs/cbtv51lb/playlist.m3u8"
+  }]
+}
