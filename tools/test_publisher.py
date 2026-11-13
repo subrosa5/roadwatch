@@ -66,5 +66,23 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(ConnectionError): p.handle(obs(1000), b'c')
             self.assertEqual(Publisher(api, path).state['records'], 2)
 
+    def test_clip_cap_and_duplicate_event_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            api = Api(); api.events = [{'id': 'fixture-event'}]
+            p = Publisher(api, Path(d) / 'ledger.json', daily_clips=1)
+            p.handle(obs(0, 'fire'), b'a')
+            self.assertEqual(p.handle(obs(5, 'fire'), b'b'), [{'id': 'fixture-event'}])
+            self.assertEqual(p.state['clips'], 1)
+            p.handle(obs(130, 'fire'), b'c')
+            self.assertEqual(p.handle(obs(135, 'fire'), b'd'), [])
+            self.assertEqual(len(api.observations), 2)
+
+    def test_corrupt_ledger_does_not_reset_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'ledger.json'
+            for value in ['{"records": 1, "clips": 0}', '{"day":"invalid","records":1,"clips":0,"cooldown":{},"last_heartbeat":0}']:
+                path.write_text(value)
+                with self.assertRaises(ValueError): Publisher(Api(), path)
+
 
 if __name__ == '__main__': unittest.main(verbosity=2)
