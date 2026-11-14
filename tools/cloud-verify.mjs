@@ -46,7 +46,12 @@ const post = (path, body) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-if(input.operation==='tracking-probe') {
+if(input.operation==='package'){
+ const bytes=Buffer.from(await(await call('/downloads/roadwatch-hostrix-fix.zip')).arrayBuffer());
+ const hash=createHash('sha256').update(bytes).digest('hex');
+ if(input.expected_sha256&&hash!==input.expected_sha256)throw Error('Published ZIP differs from verified archive');
+ console.log(JSON.stringify({published_package_verified:true,bytes:bytes.length,sha256:hash}));
+} else if(input.operation==='tracking-probe') {
   for(let i=0;i<(input.maintain_view?15:6);i++){
     if(input.maintain_view&&i%4===0)await post('/api/cameras/iowa-cbtv51/view',{kind:'tracking'});
     const started=Date.now();
@@ -54,7 +59,7 @@ if(input.operation==='tracking-probe') {
     if(!r.ok)console.log(JSON.stringify({status:r.status}));else {
       const d=await r.json();const jpeg=Buffer.from(d.jpeg,'base64');
       await writeFile('/private/tmp/roadwatch-hostrix-frame.jpg',jpeg);
-      console.log(JSON.stringify({latency_ms:Date.now()-started,frame_id:d.observation.frame_id,captured_at:d.observation.captured_at,age_ms:Date.now()-Date.parse(d.observation.captured_at),stale:d.stale,tracks:d.observation.detections,jpeg_bytes:jpeg.length}));
+      console.log(JSON.stringify({latency_ms:Date.now()-started,frame_id:d.observation.frame_id,captured_at:d.observation.captured_at,age_ms:Date.now()-Date.parse(d.observation.captured_at),window_frames:d.frames?.length||1,stale:d.stale,tracks:d.observation.detections,jpeg_bytes:jpeg.length}));
     }
     if(i<(input.maintain_view?14:5))await new Promise(r=>setTimeout(r,1000));
   }
@@ -87,7 +92,7 @@ if(input.operation==='tracking-probe') {
   if(!demand.active)throw Error('Viewer lease not active');
   const maintenance=await (await post('/api/ops/maintenance',{})).json();
   const stats=await (await call('/api/stats')).json();
-  const zip=await call('/downloads/roadwatch-botkeep.zip');
+  const zip=await call('/downloads/roadwatch-hostrix-fix.zip');
   if(!zip.headers.get('content-type')?.includes('application/zip'))throw Error('ZIP MIME invalid');
   const bytes=Buffer.from(await zip.arrayBuffer());
   if(bytes.readUInt16LE(0)!==0x4b50)throw Error('ZIP header invalid');

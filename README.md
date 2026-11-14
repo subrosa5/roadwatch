@@ -11,6 +11,7 @@
 [Осталось владельцу: единая инструкция запуска](docs/OWNER_FINAL_STEPS.md). [Пилот и результаты теста](docs/BOTKEEP_PILOT.md).
 
 - [Открыть облачную консоль](https://roadwatch-moscow-console.dealreal259.chatgpt.site)
+- [Скачать актуальный пакет Hostrix](https://roadwatch-moscow-console.dealreal259.chatgpt.site/downloads/roadwatch-hostrix-fix.zip) — Upload/Unzip с заменой на существующем сервере; без Redeploy и смены ключей.
 - [Учебные события, сохранённые в облаке](https://roadwatch-moscow-console.dealreal259.chatgpt.site/?cloud-demo=1)
 - [Текущая облачная архитектура, проверка и ограничения](docs/CLOUD.md)
 

@@ -517,12 +517,12 @@
             </div>
           </article>
           <article class="panel setup-panel">
-            <h2>Завершить облачный запуск</h2>
+            <h2>Облачный коллектор · Hostrix</h2>
             <p id="collector-status" class="inline-note">Активность коллектора не подтверждена.</p>
-            <ol><li>Войти в Botkeep и выбрать бесплатный Python-сервер.</li><li>Импортировать <a href="./downloads/roadwatch-botkeep.zip" download>готовый пакет запуска ZIP</a>. Команда: <code>python main.py</code>.</li><li>Первый запуск выполнит проверку. Затем добавить секреты подключения и установить <code>ROADWATCH_MODE=run</code>.</li><li>Проверить здесь статус и свежий проанализированный кадр.</li></ol>
+            <ol><li>Остановить существующий сервер Hostrix кнопкой Stop.</li><li>Скачать <a href="./downloads/roadwatch-hostrix-fix.zip" download>актуальный пакет Hostrix ZIP</a>, загрузить через Files → Upload files и распаковать Unzip с заменой. Не использовать Redeploy: установленные пакеты и данные нужны для продолжения работы.</li><li>Оставить команду <code>python3 -u hostrix_bootstrap.py --repair</code>, Python 3.12 и <code>ROADWATCH_MODE=run</code>. Автоустановка «Install packages first» выключена. Существующие ключи менять не нужно.</li><li>Нажать Start, дождаться preflight и проверить статус здесь. Новый профиль — 4 кадра/с; источник и сеть добавляют задержку.</li></ol>
             <p id="tracking-status" class="muted">Облачное сопровождение транспорта: требуется запуск коллектора.</p><p><a href="./clips/vehicle-proof.mp4" target="_blank" rel="noopener">Записанный тест реального детектора и трекера · не live ↗</a></p><p id="preview-budget" class="muted">Квота просмотра анализа: 6000 кадров/сутки.</p>
             <p id="maintenance-status" class="muted">Очистка подготовлена.</p>
-            <p class="muted">Модель огня и дыма экспериментальная. Проверенного детектора ДТП пока нет. Регистрация в хостинге и разрешение браузерных уведомлений выполняются владельцем.</p>
+            <p class="muted">Модель огня и дыма экспериментальная. Проверенного детектора ДТП пока нет. Разрешение браузерных уведомлений выполняется владельцем.</p>
           </article>
         </section>
       </main>
