@@ -15,6 +15,9 @@ def incident_labels(observation):
             and d["score"] >= (0.85 if d["label"] == "smoke" else 0.8)}
 
 
+class PublicationBudgetError(RuntimeError): pass
+
+
 class Publisher:
     def __init__(self, api, ledger, heartbeat_seconds=900, daily_records=400, daily_clips=5):
         self.api = api
@@ -46,7 +49,7 @@ class Publisher:
 
     def send(self, observation, jpeg):
         if self.state["records"] >= self.record_limit:
-            raise RuntimeError("Publication budget exhausted; monitoring stopped")
+            raise PublicationBudgetError("Publication budget exhausted; monitoring stopped")
         # Reserve before network I/O: an ambiguous response cannot bypass the cap.
         self.state["records"] += 1
         self.save()
@@ -73,15 +76,14 @@ class Publisher:
                      if current_time - self.state["cooldown"].get(label, 0) >= 120}
         if confirmed and self.state["clips"] < self.clip_limit:
             if self.state["records"] + 2 > self.record_limit:
-                raise RuntimeError("Publication budget cannot admit confirmation pair")
-            for label in confirmed:
-                self.state["cooldown"][label] = current_time
-            self.save()
+                raise PublicationBudgetError("Publication budget cannot admit confirmation pair")
             events = []
             for data, frame in [previous, (observation, jpeg)]:
                 filtered = {**data, "detections": [d for d in data["detections"]
                             if d["label"] == "vehicle" or d["label"] in confirmed]}
                 events.extend(self.send(filtered, frame))
+            for label in confirmed:
+                self.state["cooldown"][label] = current_time
             self.state["last_heartbeat"] = current_time
             unique = list({event["id"]: event for event in events}.values())
             clips = unique[:max(0, self.clip_limit - self.state["clips"])]

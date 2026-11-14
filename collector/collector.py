@@ -3,6 +3,7 @@
 Never runs implicitly from the frontend. No default camera URLs or model downloads.
 """
 import argparse
+import csv
 import asyncio
 from collections import deque
 import hashlib
@@ -21,11 +22,17 @@ import numpy as np
 import requests
 
 try:
-    from .publisher import Publisher
+    from .publisher import Publisher, PublicationBudgetError
+    from .outbox import ClipOutbox
 except ImportError:
-    from publisher import Publisher
+    from publisher import Publisher, PublicationBudgetError
+    from outbox import ClipOutbox
 
 LABELS = {"vehicle", "collision", "smoke", "fire"}
+
+class FatalApiError(RuntimeError): pass
+class RetryableApiError(RuntimeError): pass
+class PublicationQuotaError(RuntimeError): pass
 
 
 class Detector:
@@ -105,14 +112,32 @@ class Api:
                 raise ValueError("Sites service token requires a Sites HTTPS origin")
             self.session.headers["OAI-Sites-Authorization"] = "Bearer " + sites_token
 
-    def post(self, path, **kwargs):
-        response = self.session.post(self.base + path, timeout=20, allow_redirects=False, **kwargs)
-        if 300 <= response.status_code < 400:
-            raise RuntimeError("Collector stopped: API redirect is not allowed")
-        if response.status_code in {401, 403, 429, 507}:
-            raise RuntimeError(f"Collector stopped: API status {response.status_code}")
-        response.raise_for_status()
-        return response.json()
+    def request(self, method, path, **kwargs):
+        if not path.startswith('/api/') or '://' in path: raise ValueError('Invalid API path')
+        for attempt in range(3):
+            try:
+                sender = self.session.post if method == 'POST' else self.session.get
+                response = sender(self.base + path, timeout=(5,15), allow_redirects=False, **kwargs)
+            except requests.RequestException:
+                if attempt == 2: raise RetryableApiError('API network unavailable') from None
+                time.sleep(2**attempt); continue
+            status = response.status_code
+            if 300 <= status < 400: raise FatalApiError('API redirect is not allowed')
+            if status in {401,403}: raise FatalApiError('API authorization or camera configuration rejected')
+            if status in {429,507}: raise PublicationQuotaError('API quota reached')
+            if status == 400:
+                try: stale=response.json().get('error')=='Stale or future frame'
+                except ValueError: stale=False
+                if stale: raise RetryableApiError('Observation expired during network outage')
+            if status in {408,409,425} or status >= 500:
+                if attempt == 2: raise RetryableApiError('API temporarily unavailable')
+                time.sleep(2**attempt); continue
+            if status >= 400: raise FatalApiError('API request rejected')
+            try: return response.json()
+            except ValueError: raise RetryableApiError('API returned invalid JSON') from None
+
+    def post(self, path, **kwargs): return self.request('POST', path, **kwargs)
+    def get(self, path): return self.request('GET', path)
 
 
 def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
@@ -123,22 +148,33 @@ def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
             "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale=640:-2", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
 
 
-async def evidence(event, directory, api, ffmpeg, pre, post):
+async def evidence(event, directory, api, ffmpeg, pre, post, outbox=None):
     """Preserve segments immediately, then gather post-roll; never invent pre-roll."""
-    event_time = time.time()
+    try: event_time=__import__("datetime").datetime.fromisoformat(event["captured_at"].replace("Z","+00:00")).timestamp()
+    except (KeyError,ValueError): event_time=time.time()
     copies = {}
     with tempfile.TemporaryDirectory(prefix="event-", dir=directory) as temp:
         target = Path(temp)
-        deadline = event_time + post + 3
-        while time.time() < deadline:
+        deadline = max(event_time + post + 5,time.time()+1)
+        while True:
+            manifest_path=directory/'segments.csv'
+            closed=None
+            if manifest_path.exists():
+                try:
+                    closed={Path(row[0]).name for row in csv.reader(manifest_path.read_text().splitlines()) if len(row)>=3}
+                    manifest_time=manifest_path.stat().st_mtime_ns
+                except (OSError,csv.Error): closed=set()
             for source in directory.glob("segment-*.ts"):
+                if closed is not None and source.name not in closed: continue
                 try:
                     info = source.stat()
-                    if info.st_mtime < event_time - pre - 3 or info.st_mtime > event_time + post + 3:
+                    if info.st_mtime < event_time - pre - 3 or info.st_mtime > event_time + post + 5:
                         continue
-                    # A segment is copied only after FFmpeg has moved on to the next one.
-                    if time.time() - info.st_mtime < 2.5:
-                        continue
+                    # The CSV lists sealed segments. Its timestamp also prevents
+                    # copying an old list entry whose ring slot is being reused.
+                    if closed is not None:
+                        if info.st_mtime_ns > manifest_time: continue
+                    elif time.time()-info.st_mtime<2.5: continue
                     key = (source.name, info.st_mtime_ns)
                     if key not in copies:
                         dest = target / f"{info.st_mtime_ns}.ts"
@@ -146,6 +182,7 @@ async def evidence(event, directory, api, ffmpeg, pre, post):
                         copies[key] = dest
                 except FileNotFoundError:
                     continue
+            if time.time() >= deadline or (directory/"recorder-stopped").exists(): break
             await asyncio.sleep(1)
         if not copies:
             print(json.dumps({"event_id": event["id"], "recording": "unavailable_no_segments"}))
@@ -160,10 +197,13 @@ async def evidence(event, directory, api, ffmpeg, pre, post):
             process.kill(); await process.wait()
             return
         if process.returncode == 0 and output.exists() and output.stat().st_size <= 25 * 1024 * 1024:
-            await asyncio.to_thread(api.post, f'/api/events/{event["id"]}/evidence', data=output.read_bytes(), headers={"Content-Type": "video/mp4"})
+            if outbox:
+                await asyncio.to_thread(outbox.enqueue,event['id'],output)
+            else:
+                await asyncio.to_thread(api.post, f'/api/events/{event["id"]}/evidence', data=output.read_bytes(), headers={"Content-Type": "video/mp4"})
 
 
-async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget):
+async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget, state, publisher, outbox):
     if not camera.get("enabled") or not camera.get("approved"):
         return
     if not re.fullmatch(r"[a-z0-9-]{1,80}", camera["id"]):
@@ -177,16 +217,14 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     for file in directory.glob("segment-*.ts"):
         file.unlink()
     (directory / "frame.jpg").unlink(missing_ok=True)
+    (directory / "recorder-stopped").unlink(missing_ok=True)
+    (directory / "segments.csv").unlink(missing_ok=True)
     fps = float(settings.get("fps", 1))
     if not .2 <= fps <= 5:
         raise ValueError("Supported FPS: 0.2–5; confirmation needs adjacent distinct frames within six seconds")
     ffmpeg = settings.get("ffmpeg", "ffmpeg")
     process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     last_hash = None
-    publisher = Publisher(api, directory / "publication.json",
-                          settings.get("heartbeat_seconds", 900),
-                          settings.get("daily_publication_limit", 400),
-                          settings.get("daily_clip_limit", 5))
     clips = set()
     try:
         while process.returncode is None:
@@ -195,7 +233,8 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 if task.done():
                     clips.remove(task)
                     if task.exception():
-                        raise task.exception()
+                        state["last_error"]="quota"
+                        print(json.dumps({"recording":"failed","reason":type(task.exception()).__name__}))
             path = directory / "frame.jpg"
             if not path.exists() or time.time() - path.stat().st_mtime > 10:
                 continue
@@ -209,6 +248,7 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
             if frame_hash == last_hash:
                 continue
             last_hash = frame_hash
+            state['last_frame_at'] = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
             async with inference_lock:
                 day = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
                 if cpu_budget["day"] != day:
@@ -222,14 +262,23 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 temporary = ledger.with_suffix('.tmp')
                 temporary.write_text(json.dumps(cpu_budget))
                 temporary.replace(ledger)
+                state['frames_analyzed'] += 1
+                state['state'] = 'quota_exhausted' if state.get('quota_day') == day else 'running'
+                state['last_error'] = None
             captured_at = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
             data = {"camera_id": camera["id"], "frame_id": frame_hash, "captured_at": captured_at, "detections": detections, "model": settings["model_version"], "clock": "collector_arrival"}
-            admitted = await asyncio.to_thread(publisher.handle, data, jpeg)
+            state['latest'] = (data,jpeg)
+            try:
+                admitted = await asyncio.to_thread(publisher.handle, data, jpeg)
+            except (PublicationQuotaError,PublicationBudgetError):
+                state.update(state="quota_exhausted",last_error="quota",quota_day=day); admitted=[]
+            except RetryableApiError:
+                state['last_error']='network'; admitted=[]
             for event in admitted:
-                task = asyncio.create_task(evidence(event, directory, api, ffmpeg, settings.get("pre_seconds", 10), settings.get("post_seconds", 10)))
+                task = asyncio.create_task(evidence(event, directory, api, ffmpeg, settings.get("pre_seconds", 10), settings.get("post_seconds", 10),outbox))
                 clips.add(task)
             print(json.dumps({"camera": camera["id"], "frame_id": frame_hash, "detections": len(detections), "new_events": len(admitted)}))
-        raise RuntimeError("Stream recorder exited; source unavailable")
+        raise RetryableApiError("Stream recorder exited; source unavailable")
     finally:
         if process.returncode is None:
             process.terminate()
@@ -237,6 +286,7 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 await asyncio.wait_for(process.wait(), 8)
             except asyncio.TimeoutError:
                 process.kill(); await process.wait()
+        (directory/"recorder-stopped").touch()
         if clips:
             await asyncio.gather(*clips, return_exceptions=True)
 
@@ -257,13 +307,78 @@ async def main(config_path):
     if not isinstance(budget.get("day"),str) or not isinstance(budget.get("seconds"),(float,int)) or not np.isfinite(budget["seconds"]) or budget["seconds"]<0:
         raise ValueError("Invalid CPU ledger; stopped instead of resetting budget")
     lock = asyncio.Lock()
-    tasks = [asyncio.create_task(run_camera(c, detector, api, config, lock, budget)) for c in enabled]
+    tasks = []
+    outbox=ClipOutbox(api,root/'outbox')
+    started=time.monotonic()
+    states={c['id']:{'state':'starting','frames_analyzed':0,'last_frame_at':None,'last_error':None,'latest':None,'view_active':False} for c in enabled}
+    async def supervise(camera):
+        state=states[camera['id']]
+        publisher=Publisher(api,root/camera['id']/'publication.json',config.get('heartbeat_seconds',900),config.get('daily_publication_limit',400),config.get('daily_clip_limit',5))
+        delay=2
+        while True:
+            try:
+                state['state']='starting'
+                await run_camera(camera,detector,api,config,lock,budget,state,publisher,outbox)
+            except RetryableApiError:
+                if state['frames_analyzed']>0 and state['last_frame_at'] and time.time()-__import__('datetime').datetime.fromisoformat(state['last_frame_at']).timestamp()<20: delay=2
+                state.update(state='backoff',last_error='stream')
+                print(json.dumps({'camera':camera['id'],'state':'backoff','retry_seconds':delay}))
+                await asyncio.sleep(delay)
+                delay=min(60,delay*2)
+    async def telemetry(camera):
+        state=states[camera['id']]
+        next_cleanup=0;last_sent=0;last_state=None
+        while True:
+            if time.monotonic()-last_sent<60 and state["state"]==last_state:
+                await asyncio.sleep(1);continue
+            payload={k:state[k] for k in ['state','frames_analyzed','last_frame_at','last_error']}
+            payload.update(cpu_seconds=budget['seconds'],uptime_seconds=time.monotonic()-started,fps=config.get('fps',.2),model=config['model_version'],capabilities=['fire','smoke'])
+            try:
+                await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/heartbeat',json=payload)
+                if time.monotonic()>=next_cleanup:
+                    await asyncio.to_thread(api.post,'/api/ops/maintenance',json={})
+                    next_cleanup=time.monotonic()+3600
+            except (RetryableApiError,PublicationQuotaError): state['last_error']='network'
+            last_sent=time.monotonic();last_state=state["state"]
+            await asyncio.sleep(1)
+    async def previews(camera):
+        state=states[camera['id']]
+        sent=None;quota_day=None
+        while True:
+            today=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
+            try:
+                demand=await asyncio.to_thread(api.get,'/api/cameras/'+camera['id']+'/demand')
+                state['view_active']=demand.get('active',False)
+                if state['view_active'] and state['latest'] and quota_day!=today:
+                    data,jpeg=state['latest']
+                    if data['frame_id']!=sent:
+                        import base64
+                        await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/preview',json={'observation':data,'jpeg':base64.b64encode(jpeg).decode()})
+                        sent=data['frame_id']
+            except PublicationQuotaError: quota_day=today
+            except RetryableApiError: pass
+            await asyncio.sleep(5)
+    async def uploads():
+        while True:
+            try: await asyncio.to_thread(outbox.flush_one)
+            except (RetryableApiError,PublicationQuotaError):
+                await asyncio.sleep(30)
+            await asyncio.sleep(10)
+    for camera in enabled:
+        tasks.extend([asyncio.create_task(supervise(camera)),asyncio.create_task(telemetry(camera)),asyncio.create_task(previews(camera))])
+    tasks.append(asyncio.create_task(uploads()))
     try:
         await asyncio.gather(*tasks)
     finally:
-        for task in tasks:
-            task.cancel()
+        for state in states.values(): state['state']='stopped'
+        for task in tasks: task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        for camera in enabled:
+            state=states[camera['id']]
+            try:
+                await asyncio.wait_for(asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/heartbeat',json={'state':'stopped','frames_analyzed':state['frames_analyzed'],'last_frame_at':state['last_frame_at'],'last_error':state['last_error'],'cpu_seconds':budget['seconds'],'uptime_seconds':time.monotonic()-started,'fps':config.get('fps',.2),'model':config['model_version'],'capabilities':['fire','smoke']}),timeout=5)
+            except Exception: pass
+
 
 
 if __name__ == "__main__":

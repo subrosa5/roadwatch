@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import {createECDH,randomBytes} from 'node:crypto';
 execFileSync(process.execPath, ["tools/build-cloud.mjs"], {
   cwd: new URL("..", import.meta.url),
 });
@@ -55,18 +56,22 @@ function setup(fetcher) {
     },
   };
   const objects = new Map();
+  const metadata = new Map();
   const BUCKET = {
-    async put(key, bytes) {
+    async put(key, bytes, options={}) {
       objects.set(key, new Uint8Array(bytes));
+      metadata.set(key,options.customMetadata||{});
     },
     async delete(key) {
-      objects.delete(key);
+      objects.delete(key); metadata.delete(key);
     },
+    async head(key) {return objects.has(key)?{size:objects.get(key).length,customMetadata:metadata.get(key)}:null;},
     async get(key, options) {
       const data = objects.get(key);
       if (!data) return null;
       const range = options?.range;
       return {
+        customMetadata:metadata.get(key),
         body: range
           ? data.slice(range.offset, range.offset + range.length)
           : data,
@@ -189,7 +194,7 @@ test("cloud rejects disabled cameras, stale input and exhausted quota", async ()
     (
       await s.post("/api/observations", {
         ...obs("a", t),
-        camera_id: "iowa-cbtv51",
+        camera_id: "iowa-wwdtv039",
         demo: false,
       })
     ).status,
@@ -258,16 +263,13 @@ test("cloud JPEG/frame matching, private MP4 ranges and byte cap", async () => {
     ).status,
     416,
   );
-  s.sql.prepare("UPDATE rw_evidence SET bytes=?").run(100 * 1024 * 1024);
-  assert.equal(
-    (
-      await s.call("/api/events/" + event.id + "/evidence", {
-        method: "POST",
-        body: mp4,
-      })
-    ).status,
-    507,
-  );
+  const duplicate=await s.call('/api/events/'+event.id+'/evidence',{method:'POST',body:mp4});
+  assert.equal(duplicate.status,200);
+  assert.equal((await duplicate.json()).id,e.id);
+  await s.post('/api/observations',obs('c',t+2000,'smoke'));
+  const second=(await (await s.post('/api/observations',obs('d',t+3000,'smoke'))).json()).events[0];
+  s.sql.prepare("UPDATE rw_evidence SET bytes=?").run(100*1024*1024);
+  assert.equal((await s.call('/api/events/'+second.id+'/evidence',{method:'POST',body:mp4})).status,507);
 });
 test("cloud probes persist reachability without asserting camera or CV access", async () => {
   const s = setup();
@@ -329,11 +331,69 @@ test("international registry excludes retired cameras and separates playback fro
     ),
   );
   assert.ok(
-    cs.every((c) => !c.approved && !c.enabled && c.health === "disabled"),
+    cs.every((c) => !c.collector.online),
   );
   assert.equal((await (await s.call("/api/stats")).json()).monitoring, false);
   assert.equal(
     (await s.call("/api/cameras/khimki-mkad74/playback-diagnostics")).status,
     404,
   );
+});
+
+test('collector activity is independent of archived frame freshness and expires honestly',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});
+ const data={state:'running',frames_analyzed:12,cpu_seconds:.8,uptime_seconds:60,fps:.2,last_frame_at:new Date().toISOString(),model:'fire-smoke-test',capabilities:['fire','smoke']};
+ assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',data,true)).status,403);
+ assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',data)).status,200);
+ const stats=await (await s.call('/api/stats')).json();assert.equal(stats.monitoring,true);assert.equal(stats.receiving_real,0);assert.equal(stats.collectors_online,1);assert.equal(stats.daily_frames,0);
+ s.sql.prepare("UPDATE rw_probes SET checked_at=? WHERE source_id='collector:iowa-cbtv51'").run(new Date(Date.now()-181000).toISOString());
+ assert.equal((await (await s.call('/api/stats')).json()).monitoring,false);
+ assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',{...data,last_frame_at:'invalid'})).status,400);
+});
+
+test('preview lease expires, JPEG and boxes stay atomic, and writes have an independent quota',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});
+ const path='/api/cameras/iowa-cbtv51',o={...obs('preview',Date.now()),camera_id:'iowa-cbtv51',demo:false};
+ const jpeg=Buffer.from([255,216,255,0,...Array(70000).fill(1)]).toString('base64');
+ assert.equal((await (await s.post(path+'/preview',{observation:o,jpeg})).json()).reason,'no_viewer');
+ assert.equal((await s.post(path+'/view',{},true)).status,200);
+ assert.equal((await (await s.call(path+'/demand')).json()).active,true);
+ assert.equal((await s.post(path+'/preview',{observation:o,jpeg},true)).status,403);
+ assert.equal((await s.post(path+'/preview',{observation:o,jpeg})).status,200);
+ const preview=await (await s.call(path+'/preview')).json();assert.equal(preview.observation.frame_id,o.frame_id);assert.equal(preview.jpeg,jpeg);assert.equal(preview.stale,false);
+ assert.equal((await (await s.call('/api/stats')).json()).daily_frames,0);
+ assert.equal((await (await s.call('/api/events')).json()).length,0);
+ s.sql.prepare("UPDATE rw_probes SET data=json_object('count',6000) WHERE source_id LIKE 'preview-quota:%'").run();
+ assert.equal((await s.post(path+'/preview',{observation:o,jpeg})).status,429);
+ await s.call(path+'/view',{method:'DELETE'},true);
+ assert.equal((await (await s.call(path+'/demand')).json()).active,false);
+});
+
+test('interrupted upload recovers from durable reservation and cannot double-spend storage',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const t=Date.now()-2000;
+ await s.post('/api/observations',obs('r1',t));const event=(await (await s.post('/api/observations',obs('r2',t+1000))).json()).events[0];
+ const mp4=Uint8Array.from([0,0,0,12,102,116,121,112,0,0,0,0]);
+ const uploaded=await (await s.call('/api/events/'+event.id+'/evidence',{method:'POST',body:mp4})).json();
+ s.sql.prepare("UPDATE rw_evidence SET state='uploading',created_at=? WHERE id=?").run(new Date(Date.now()-11*60000).toISOString(),uploaded.id);
+ s.sql.prepare('UPDATE rw_events SET evidence_id=NULL WHERE id=?').run(event.id);
+ const recovered=await (await s.post('/api/ops/retention',{})).json();assert.equal(recovered.recovered_uploads,1);
+ assert.equal(s.sql.prepare('SELECT evidence_id FROM rw_events WHERE id=?').get(event.id).evidence_id,uploaded.id);
+ assert.equal((await s.call('/api/events/'+event.id+'/evidence',{method:'POST',body:mp4})).status,200);
+});
+
+test('web push is viewer opt-in, queues only real events, and removes expired subscriptions',async()=>{
+ let pushed=0;const s=setup(async(url,options)=>{assert.equal(new URL(url).hostname,'fcm.googleapis.com');assert.equal(options.redirect,'manual');pushed++;return new Response(null,{status:410});});
+ await s.post('/api/ops/init',{});
+ const client=createECDH('prime256v1');client.generateKeys();const sub={endpoint:'https://fcm.googleapis.com/fcm/send/fixture',keys:{p256dh:client.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')}};
+ assert.equal((await s.post('/api/push/subscription',sub)).status,403);
+ assert.equal((await s.post('/api/push/subscription',sub,true)).status,200);
+ assert.equal((await (await s.call('/api/push/settings')).json()).subscriptions,1);
+ const t=Date.now()-2000;
+ await s.post('/api/observations',obs('d1',t));await s.post('/api/observations',obs('d2',t+1000));
+ assert.equal(s.sql.prepare("SELECT COUNT(*) n FROM rw_probes WHERE source_id LIKE 'pushq:%'").get().n,0);
+ for(const [i,time] of [['real1',t],['real2',t+1000]])await s.post('/api/observations',{...obs(i,time),demo:false,camera_id:'iowa-cbtv51'});
+ assert.equal(s.sql.prepare("SELECT COUNT(*) n FROM rw_probes WHERE source_id LIKE 'pushq:%'").get().n,1);
+ s.sql.prepare("UPDATE rw_probes SET data=json_set(data,'$.next_attempt',?) WHERE source_id LIKE 'pushq:%'").run(new Date(0).toISOString());
+ const result=await (await s.post('/api/ops/maintenance',{})).json();assert.equal(result.notifications.removed,1);assert.equal(pushed,1);
+ assert.equal((await (await s.call('/api/push/settings')).json()).subscriptions,0);
 });

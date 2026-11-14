@@ -6,6 +6,8 @@ import {
   InputError,
 } from "../src/core.mjs";
 
+import { createRuntime } from "./runtime.mjs";
+
 // This deployment MUST remain owner-private in Sites. Service requests also
 // require Sites dispatch authorization; the application secret adds a narrow role.
 const TARGET = 2;
@@ -113,6 +115,18 @@ async function authorize(request, env) {
     fail("Same-origin write required", 403);
   return { service, actor: user || "collector" };
 }
+const runtime = env => createRuntime({env,config:CAMERA_CONFIG,observation,fail,first,rows,stmt,bodyJSON,sha256,now});
+async function maintenance(env,fetcher,origin,force=false) {
+ const rt=runtime(env),last=await rt.read('maintenance:retention');
+ let cleaned=null;
+ if(force||!last||Date.now()-Date.parse(last.received_at)>300000) {
+   await rt.write('maintenance:retention',{state:'running'});
+   try {cleaned=await (await retention(env)).json();await rt.write('maintenance:retention',{state:'ok',...cleaned});}
+   catch(error){await rt.write('maintenance:retention',{state:'failed'});throw error;}
+ }
+ const notifications=await rt.dispatch(fetcher,origin);
+ return {retention:cleaned,notifications};
+}
 async function cameras(env) {
   const cs = await rows(env, "SELECT data FROM rw_cameras");
   return Promise.all(
@@ -128,7 +142,7 @@ async function cameras(env) {
           c.id,
         );
         const latest = o ? JSON.parse(o.data) : null;
-        return { ...c, health: cameraHealth(c, latest), latest };
+        return { ...c, health: cameraHealth(c, latest), latest, collector:c.demo?null:await runtime(env).health(c.id) };
       }),
   );
 }
@@ -178,7 +192,7 @@ async function ingest(request, env, auth) {
     c.id,
     o.frame_id,
   );
-  if (duplicate) return json({ duplicate: true, events: [] });
+  if (duplicate) return json({duplicate:true,events:(await rows(env,"SELECT * FROM rw_events WHERE camera_id=? AND frame_id=?",c.id,o.frame_id)).map(eventView)});
   if (previous && o.captured_at <= previous.captured_at)
     fail("Out-of-order frame", 409);
   const eventTypes = candidates(o, previous);
@@ -228,6 +242,7 @@ async function ingest(request, env, auth) {
       ),
     );
   }
+  for(const id of ids)commands.push(runtime(env).queueStatement(id));
   const result = await env.DB.batch(commands);
   if (!result[0].meta.changes) {
     const count = await first(
@@ -329,10 +344,15 @@ async function uploadEvidence(request, env, eventId, auth) {
   const hash = await sha256(bytes),
     id = crypto.randomUUID(),
     key = "evidence/" + id + ".mp4";
+  const previous=await first(env,"SELECT * FROM rw_evidence WHERE event_id=? AND state IN ('ready','uploading') ORDER BY created_at DESC LIMIT 1",eventId);
+  if(previous) {
+    if(previous.state==='ready' && previous.sha256===hash)return json({id:previous.id,sha256:hash,bytes:previous.bytes,duplicate:true});
+    fail(previous.state==='uploading'?'Upload pending; retry later':'Event already has different evidence',409);
+  }
   const reservation = await stmt(
     env,
     `INSERT INTO rw_evidence(id,event_id,object_key,bytes,sha256,state,created_at)
-    SELECT ?,?,?,?,?,'uploading',? WHERE COALESCE((SELECT SUM(bytes) FROM rw_evidence WHERE state IN ('ready','uploading')),0)+?<=?`,
+    SELECT ?,?,?,?,?,'uploading',? WHERE COALESCE((SELECT SUM(bytes) FROM rw_evidence WHERE state IN ('ready','uploading')),0)+?<=? AND NOT EXISTS(SELECT 1 FROM rw_evidence WHERE event_id=? AND state IN ('ready','uploading'))`,
     id,
     eventId,
     key,
@@ -341,20 +361,24 @@ async function uploadEvidence(request, env, eventId, auth) {
     now(),
     bytes.length,
     STORAGE_LIMIT,
+    eventId,
   ).run();
-  if (!reservation.meta.changes) fail("Evidence storage budget reached", 507);
+  if (!reservation.meta.changes) {
+    const active=await first(env,"SELECT id FROM rw_evidence WHERE event_id=? AND state IN ('ready','uploading')",eventId);
+    fail(active?'Upload already reserved':'Evidence storage budget reached',active?409:507);
+  }
   try {
     await env.BUCKET.put(key, bytes, {
-      httpMetadata: { contentType: "video/mp4" },
+      httpMetadata: { contentType: "video/mp4" },customMetadata:{sha256:hash,event_id:eventId},
     });
     await env.DB.batch([
       stmt(env, "UPDATE rw_evidence SET state='ready' WHERE id=?", id),
       stmt(env, "UPDATE rw_events SET evidence_id=? WHERE id=?", id, eventId),
     ]);
   } catch (e) {
-    await env.BUCKET.delete(key);
-    await stmt(env, "DELETE FROM rw_evidence WHERE id=?", id).run();
-    throw e;
+    // Keep the durable reservation: R2 or D1 may have committed before an
+    // ambiguous network error. Maintenance reconciles it; retries are idempotent.
+    fail("Evidence upload interrupted; retry later",503);
   }
   return json({ id, sha256: hash, bytes: bytes.length }, 201);
 }
@@ -460,10 +484,20 @@ async function probe(env, fetcher) {
   return json(results);
 }
 async function retention(env) {
+  let recovered=0,abandoned=0;
+  const pending=await rows(env,"SELECT * FROM rw_evidence WHERE state='uploading' AND created_at<? LIMIT 2",new Date(Date.now()-10*60000).toISOString());
+  for(const item of pending) {
+    const object=await env.BUCKET.head(item.object_key);
+    if(object && object.size===item.bytes && object.customMetadata?.sha256===item.sha256 && object.customMetadata?.event_id===item.event_id) {
+      const event=await first(env,'SELECT id FROM rw_events WHERE id=?',item.event_id);
+      if(event){await env.DB.batch([stmt(env,"UPDATE rw_evidence SET state='ready' WHERE id=?",item.id),stmt(env,'UPDATE rw_events SET evidence_id=? WHERE id=?',item.id,item.event_id)]);recovered++;continue;}
+    }
+    await env.BUCKET.delete(item.object_key);await stmt(env,"UPDATE rw_evidence SET state='failed' WHERE id=?",item.id).run();abandoned++;
+  }
   const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
   const expired = await rows(
     env,
-    "SELECT id,object_key FROM rw_evidence WHERE created_at<? AND state IN ('ready','uploading') ORDER BY created_at LIMIT 100",
+    "SELECT id,object_key FROM rw_evidence WHERE created_at<? AND state IN ('ready','uploading') ORDER BY created_at LIMIT 5",
     cutoff,
   );
   for (const e of expired) {
@@ -485,7 +519,7 @@ async function retention(env) {
   ).run();
   const snapshots = await rows(
     env,
-    "SELECT camera_id,object_key FROM rw_snapshots WHERE captured_at<? LIMIT 20",
+    "SELECT camera_id,object_key FROM rw_snapshots WHERE captured_at<? LIMIT 2",
     old,
   );
   for (const f of snapshots) {
@@ -497,16 +531,22 @@ async function retention(env) {
       f.object_key,
     ).run();
   }
+  for(const camera of CAMERA_CONFIG.filter(c=>!c.demo)) {
+    const object=await env.BUCKET.head('previews/'+camera.id+'.jpg');
+    if(object && Date.parse(object.customMetadata?.captured_at||'')<Date.now()-86400000)await env.BUCKET.delete('previews/'+camera.id+'.jpg');
+  }
+  await stmt(env,"DELETE FROM rw_probes WHERE checked_at<? AND (source_id LIKE 'pushq:%' OR source_id LIKE 'preview-quota:%' OR source_id LIKE 'view:%')",cutoff).run();
   return json({
     expired_clips: expired.length,
     pruned_observations: pruned.meta.changes,
     expired_snapshots: snapshots.length,
-    automatic_schedule: false,
+    recovered_uploads: recovered, abandoned_uploads: abandoned,
+    automatic_schedule: "collector_hourly_and_api_activity",
   });
 }
 export function createWorker(fetcher = fetch) {
   return {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
       try {
         const u = new URL(request.url),
           path = u.pathname;
@@ -517,10 +557,23 @@ export function createWorker(fetcher = fetch) {
             mode: "cloud",
             backend: "Sites D1/R2",
             target_cameras: TARGET,
-            monitoring: false,
+            monitoring: null,monitoring_status:"/api/stats",
           });
         const auth = await authorize(request, env);
         if (!env.DB || !env.BUCKET) fail("Storage bindings unavailable", 503);
+        if(ctx?.waitUntil)ctx.waitUntil(maintenance(env,fetcher,u.origin).catch(()=>{}));
+        const rt=runtime(env);
+        if(path==='/api/ops/maintenance'&&request.method==='POST')return json(await maintenance(env,fetcher,u.origin,true));
+        if(path==='/api/push/settings'&&request.method==='GET')return json(await rt.pushSettings());
+        if(path==='/api/push/subscription'&&['POST','DELETE'].includes(request.method))return json(await rt.subscribe(request,auth));
+        let activeRoute=path.match(/^\/api\/cameras\/([a-z0-9-]{1,80})\/(heartbeat|view|demand|preview)$/);
+        if(activeRoute){
+          const [,id,action]=activeRoute;
+          if(action==='heartbeat'&&request.method==='POST')return json(await rt.heartbeat(id,request,auth));
+          if(action==='view'&&['POST','DELETE'].includes(request.method))return json(await rt.viewing(id,request,auth));
+          if(action==='demand'&&request.method==='GET')return json(await rt.demand(id,auth));
+          if(action==='preview'&&['GET','POST'].includes(request.method))return json(await rt.preview(id,request,auth));
+        }
         if (path === "/api/ops/init" && request.method === "POST")
           return await init(env);
         if (path === "/api/ops/probe-sources" && request.method === "POST")
@@ -574,8 +627,12 @@ export function createWorker(fetcher = fetch) {
             target: TARGET,
             daily_frames: usage.n,
             daily_frame_limit: FRAME_LIMIT,
-            monitoring: false,
-            model_ready: false,
+            collectors_online: cs.filter(c=>!c.demo && c.collector?.online).length,
+            monitoring: cs.some(c=>!c.demo && c.collector?.online),
+            model_ready: cs.some(c=>!c.demo && c.collector?.online),
+            preview_quota: (await rt.read('preview-quota:'+now().slice(0,10)))?.count||0,
+            preview_daily_limit:6000,
+            maintenance:await rt.read('maintenance:retention'),
           });
         }
         if (path === "/api/capacity" && request.method === "GET")

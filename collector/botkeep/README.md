@@ -12,7 +12,7 @@ Default mode: `ROADWATCH_MODE=preflight`. It downloads one pinned 12 MB ONNX mod
 2. Upload the generated `roadwatch-botkeep.zip` using its ZIP import. The files, including `requirements.txt` and `main.py`, must be at the selected project root. This avoids granting private GitHub repository access during the compatibility test.
 3. Install `requirements.txt` through the profile's supported dependency setup. Choose Python 3.12 if offered and confirm the `python main.py` start command. The startup code loads Botkeep's managed `.env` without replacing existing environment variables.
 4. Keep `ROADWATCH_MODE=preflight`. Start once, then inspect the JSON output and `data/preflight.json`. Require `camera_network_test=true` and `resource_gate_passed=true`. Confirm there are no package/import/subprocess/network errors. This verifies compatibility, not incident accuracy or long-term availability.
-5. Before monitoring, deployment must enable and approve `iowa-cbtv51` in the **server's** camera configuration and publish/synchronize that configuration. This technical server configuration will be synchronized after the Botkeep runtime check; the owner has already authorized work on this pilot. Changing only the collector JSON cannot bypass the backend gate.
+5. The server configuration already enables and approves `iowa-cbtv51`; the second camera remains playback-only. Source readiness does not mean a collector is running.
 6. Put `INGEST_TOKEN` and `SITES_SERVICE_TOKEN` in the host's private runtime Environment, never in the ZIP, source repository, ordinary logs or support messages. Both are needed for the current owner-private Sites backend. Existing credentials are configured through owner-controlled settings; this archive does not contain them.
 7. Set `ROADWATCH_MODE=run` and start. Startup repeats preflight before beginning the collector. Verify a fresh heartbeat appears on the private front, a real JPEG can be read back and the runtime stays alive with the browser closed. An empty incident journal is expected when no event has actually been detected.
 
@@ -28,12 +28,14 @@ The process has a 30-segment FFmpeg ring bounded by configured segment count (30
 
 Runtime directory `data/` contains the downloaded model, ring files, publication ledger, CPU ledger and preflight report. Do not upload this directory as source. If the ledger is malformed, startup fails rather than resetting its quota. Disk/CPU/memory usage must be measured on the actual host. The development benchmark is not a Botkeep performance claim.
 
-The server currently expires observations after one day and clips after seven days when its retention endpoint is called. Automatic cleanup is not enabled; the storage cap stops additional evidence if cleanup has not run. This package does not claim to complete retention scheduling, browser-closed push delivery or full 24/7 operation until those are separately verified.
+The server expires observations after one day and clips after seven days. Maintenance runs with authenticated API traffic (at most once per five minutes) and an hourly collector request. There is no independent timer when both are absent. Pending clip uploads survive process restarts in a bounded 30 MiB outbox; evidence retries are idempotent.
+
+A separate runtime heartbeat reports collector activity every minute; stale archived JPEGs are not used to claim liveness. Analysis previews are requested only while the analysis tab is visible: one matching JPEG/annotation pair every five seconds, a 35-second lease and a separate 6000/day limit. They do not create events or consume the 500/day archive cap. Web Push is owner opt-in in a supported browser; delivery with the browser closed depends on browser/OS permissions and the actual runtime. It has not been verified on the owner device.
 
 ## Build from the private repository
 
 `python3 tools/build-botkeep.py /absolute/path/roadwatch-botkeep.zip`
 
-The builder includes eight explicitly named source/configuration files, including this README and third-party notices. It excludes `.env`, tokens, Git metadata, model binaries, recordings, node_modules and runtime data.
+The builder includes nine explicitly named source/configuration files, including this README and third-party notices. It excludes `.env`, tokens, Git metadata, model binaries, recordings, node_modules and runtime data.
 
 Development-only local fixture override: `ROADWATCH_PREFLIGHT_VIDEO=/path/to/local.mp4`. A fixture probe is marked `camera_network_test=false` and cannot start monitoring in run mode.

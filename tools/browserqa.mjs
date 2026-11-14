@@ -1,6 +1,6 @@
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -189,9 +189,43 @@ try {
     path: "docs/screenshots/playback-error.png",
     fullPage: true,
   });
+  await page.unroute('**/api/**');
+  let viewRequests=0, releasedViews=0, previewRequests=0;
+  const previewObservation={camera_id:'iowa-cbtv51',frame_id:'qa-synthetic-frame',captured_at:new Date().toISOString(),model:'QA SYNTHETIC ANNOTATIONS',detections:[{label:'fire',score:.95,box:[.54,.27,.18,.34]}]};
+  const jpeg=(await readFile('web/clips/fire.jpg')).toString('base64');
+  await page.route('https://video2.iowadot.gov:8888/**',route=>route.abort());
+  await page.route('**/api/**',async route=>{
+    const p=new URL(route.request().url()).pathname;
+    if(p==='/api/health')return route.fulfill({json:{backend:'Sites D1/R2'}});
+    if(p==='/api/cameras')return route.fulfill({json:[{id:'iowa-cbtv51',name:'QA · синтетический кадр аналитики',zone:'interstate29',enabled:true,approved:true,demo:false,health:'no_data',stream_url:'https://video2.iowadot.gov:8888/councilbluffs/cbtv51lb/playlist.m3u8',source_page:'https://iowadot.gov',collector:{online:true,state:'running',frames_analyzed:12}}]});
+    if(p==='/api/stats')return route.fulfill({json:{collectors_online:1,receiving_real:0,daily_frames:1,daily_frame_limit:500,preview_quota:2,preview_daily_limit:6000}});
+    if(p.endsWith('/view')){if(route.request().method()==='DELETE')releasedViews++;else viewRequests++;return route.fulfill({json:{active:true}});}
+    if(p.endsWith('/preview')){previewRequests++;return route.fulfill({json:{observation:previewObservation,jpeg,stale:false}});}
+    if(p==='/api/events'||p==='/api/sources')return route.fulfill({json:[]});
+    return route.continue();
+  });
+  await page.addInitScript(()=>{window.__notificationRequests=0;if('Notification' in window)Notification.requestPermission=async()=>{window.__notificationRequests++;return 'denied';};});
+  await page.goto(base);
+  await page.waitForFunction(()=>document.getElementById('connected-count').textContent==='1');
+  assert.equal(await page.evaluate(()=>window.__notificationRequests),0,'permission must not be requested automatically');
+  await page.locator('#mode-analysis').click();
+  await page.waitForFunction(()=>{const im=document.getElementById('camera-frame');return im.complete&&im.naturalWidth>0&&document.getElementById('analysis-tags').textContent.includes('95');});
+  assert.equal(await page.locator('#camera-live').isHidden(),true);
+  assert.equal(await page.locator('#overlay').isHidden(),false);
+  assert.equal(viewRequests,1);
+  await page.waitForTimeout(5500);
+  assert.ok(previewRequests>=2);
+  assert.equal(viewRequests,1,'5-second polling must not renew the viewer lease too often');
+  await page.screenshot({path:'docs/screenshots/analysis.png',fullPage:true});
+  await page.locator('#mode-live').click();
+  await page.waitForFunction(()=>getComputedStyle(document.getElementById('overlay')).display==='none');
+  assert.ok(releasedViews>=1);
+  await page.locator('#push-button').click();
+  await page.waitForFunction(()=>document.getElementById('push-state').textContent.includes('не выдано'));
+  assert.equal(await page.evaluate(()=>window.__notificationRequests),1);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser QA passed: video/events/review, mobile, cloud playback timeout/retry, player preservation during polling and no uncaught errors.",
+    "Browser QA passed: video/events/review, mobile, cloud playback timeout/retry, player preservation, preview lease/frame matching, voluntary notification consent and no uncaught errors.",
   );
 } finally {
   await browser.close();

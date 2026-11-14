@@ -46,7 +46,29 @@ const post = (path, body) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-if (["browser", "live"].includes(input.operation)) {
+if(input.operation==='runtime') {
+  await post('/api/ops/init',{});
+  const cameras=await (await call('/api/cameras')).json();
+  const first=cameras.find(c=>c.id==='iowa-cbtv51');
+  if(!first?.enabled||!first?.approved)throw Error('Primary source not ready');
+  if(cameras.find(c=>c.id==='iowa-wwdtv039')?.enabled)throw Error('Reserve unexpectedly enabled');
+  const settings=await (await call('/api/push/settings')).json();
+  if(!settings.public_key||!settings.available)throw Error('Push settings missing');
+  await post('/api/cameras/iowa-cbtv51/view',{});
+  const demand=await (await call('/api/cameras/iowa-cbtv51/demand')).json();
+  await call('/api/cameras/iowa-cbtv51/view',{method:'DELETE'});
+  if(!demand.active)throw Error('Viewer lease not active');
+  const maintenance=await (await post('/api/ops/maintenance',{})).json();
+  const stats=await (await call('/api/stats')).json();
+  const zip=await call('/downloads/roadwatch-botkeep.zip');
+  if(!zip.headers.get('content-type')?.includes('application/zip'))throw Error('ZIP MIME invalid');
+  const bytes=Buffer.from(await zip.arrayBuffer());
+  if(bytes.readUInt16LE(0)!==0x4b50)throw Error('ZIP header invalid');
+  const real=await (await call('/api/events')).json();
+  const anonymous=await fetch(new URL('/api/events',origin),{redirect:'manual'});
+  if(anonymous.ok&&anonymous.headers.get('content-type')?.includes('application/json'))throw Error('Anonymous journal exposed');
+  console.log(JSON.stringify({runtime_api_verified:true,source_enabled:true,reserve_enabled:false,collector_online:stats.collectors_online,real_events:real.length,preview_daily_limit:stats.preview_daily_limit,push_available:settings.available,push_subscriptions:settings.subscriptions,viewer_lease_verified:true,private_boundary:true,download_zip_bytes:bytes.length,download_zip_sha256:createHash('sha256').update(bytes).digest('hex'),maintenance}));
+} else if (["browser", "live"].includes(input.operation)) {
   const { chromium } = await import("@playwright/test");
   const browser = await chromium.launch({
     headless: true,

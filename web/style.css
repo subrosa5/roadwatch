@@ -1487,3 +1487,8 @@ dialog::backdrop {
   object-fit: contain;
   background: #000;
 }
+
+.view-modes{display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--line,#28362e)}
+.view-modes[hidden]{display:none}.view-modes button{background:transparent;color:inherit;border:1px solid #34473e;border-radius:6px;padding:7px 12px;cursor:pointer}.view-modes .selected{background:#253b30;border-color:#84cbae}.view-modes button:disabled{opacity:.4;cursor:default}
+#camera-frame{object-fit:contain}.push-panel{display:flex;align-items:center;gap:16px;padding:14px 0;font-size:12px;color:#91a69a}.push-panel button{white-space:nowrap}.setup-panel{margin-top:20px}.setup-panel li{margin:12px 0;line-height:1.6}.setup-panel code{overflow-wrap:anywhere}
+@media(max-width:600px){.push-panel{align-items:flex-start;flex-direction:column;gap:6px}}

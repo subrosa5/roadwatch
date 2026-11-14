@@ -19,6 +19,11 @@
     "capacity:iowa": "node tools/iowa-budget.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0"
+    "@playwright/test": "^1.65.0",
+    "esbuild": "0.28.2",
+    "http_ece": "1.2.1"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0"
   }
 }

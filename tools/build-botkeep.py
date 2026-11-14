@@ -7,7 +7,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 root = Path(__file__).resolve().parent.parent
 output = Path(sys.argv[1]) if len(sys.argv) > 1 else root.parent / "roadwatch-botkeep.zip"
-files = {"collector.py": root / "collector/collector.py", "publisher.py": root / "collector/publisher.py"}
+files = {"collector.py": root / "collector/collector.py", "publisher.py": root / "collector/publisher.py", "outbox.py": root / "collector/outbox.py"}
 for name in ["main.py", "requirements.txt", "config.json", "model.lock.json", "README.md", "THIRD_PARTY_NOTICES.md"]:
     files[name] = root / "collector/botkeep" / name
 with ZipFile(output, "w", ZIP_DEFLATED) as archive:

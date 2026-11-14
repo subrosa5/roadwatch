@@ -10,6 +10,9 @@
       content="Приватная консоль Roadwatch: дорожные камеры, события и видеосвидетельства. Демонстрация обозначена явно."
     />
     <title>Roadwatch — Iowa</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#0c100f" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -156,6 +159,7 @@
                     >SYNTHETIC / 12s LOOP</span
                   >
                 </div>
+                <div id="view-modes" class="view-modes" hidden><button id="mode-live" class="selected">Живое видео</button><button id="mode-analysis">Анализ кадра</button></div>
                 <div class="viewport" id="viewport">
                   <video
                     id="camera-video"
@@ -300,12 +304,13 @@
                 оператором
               </div>
               <div id="event-feed"></div>
-              <div class="feed-footer">
+              <div class="feed-footer" id="feed-status">
                 Автоматический анализ сейчас не запущен. Здесь появятся подтверждённые сервером кандидаты после подключения исполнителя.
               </div>
             </aside>
           </div>
         </section>
+        <aside class="push-panel"><button id="push-button" class="text-button">Включить push</button><span id="push-state">Браузерные уведомления ещё не включены.</span></aside>
         <section id="page-events" class="page">
           <div class="section-row">
             <h2>Журнал событий</h2>
@@ -430,10 +435,7 @@
                   value="0.198"
               /></label>
               <div class="inline-note">
-                Пилот: 2 камеры, около 4,28 ГБ видео/сутки по среднему битрейту
-                плейлистов. Текущий API допускает 500 наблюдений/сутки;
-                постоянный исполнитель CV отсутствует. CPU на кадр —
-                предположение до измерения модели.
+                Две камеры для просмотра; CV-пилот — одна CBTV51, около 1,45 ГБ входящего видео/сутки. Лимиты: 500 архивных наблюдений и 6000 preview/сутки. CPU в калькуляторе задаётся вручную; короткий Linux probe модели дал 46,32 мс/кадр без постоянного декодирования.
               </div>
             </article>
             <article class="panel capacity-results">
@@ -473,7 +475,7 @@
                   разные статусы.
                 </p>
               </div>
-              <span class="pill">Видео: 2 · CV: 0</span>
+              <span class="pill" id="source-summary">Видео: 2 · CV: 0</span>
             </div>
             <div class="source-table">
               <div class="source-head">
@@ -485,14 +487,14 @@
                   ><strong>Iowa DOT · CBTV51</strong
                   ><small>Council Bluffs · I-29/80</small></span
                 ><span>480×270 · HLS</span><span>41.231837, -95.884798</span
-                ><span class="pill warning">Не запущен</span>
+                ><span class="pill warning" id="source-cbtv51">Ожидает запуска</span>
               </div>
               <div>
                 <span
                   ><strong>Iowa DOT · WWDTV039</strong
                   ><small>West Des Moines · I-35</small></span
                 ><span>768×432 · HLS</span><span>41.559167, -93.776648</span
-                ><span class="pill warning">Не запущен</span>
+                ><span class="pill warning">Резерв · просмотр</span>
               </div>
             </div>
             <div class="inline-note">
@@ -504,7 +506,7 @@
                 >Iowa Department of Transportation</a
               >. Два коротких сегмента декодированы 13.11.2026. Просмотр
               получает видео напрямую от DOT; проверка сайта не подтверждает
-              непрерывность потока. Серверный CV и запись событий не запущены.
+              непрерывность потока. Актуальная активность CV показана в статусе коллектора.
             </div>
             <button id="probe-button" class="text-button">
               Проверить доступность из облака ↗
@@ -513,6 +515,14 @@
               Проверка веб-страницы не означает проверку видеопотока или запуск
               CV.
             </div>
+          </article>
+          <article class="panel setup-panel">
+            <h2>Завершить облачный запуск</h2>
+            <p id="collector-status" class="inline-note">Активность коллектора не подтверждена.</p>
+            <ol><li>Войти в Botkeep и выбрать бесплатный Python-сервер.</li><li>Импортировать <a href="./downloads/roadwatch-botkeep.zip" download>готовый пакет запуска ZIP</a>. Команда: <code>python main.py</code>.</li><li>Первый запуск выполнит проверку. Затем добавить секреты подключения и установить <code>ROADWATCH_MODE=run</code>.</li><li>Проверить здесь статус и свежий проанализированный кадр.</li></ol>
+            <p id="preview-budget" class="muted">Квота просмотра анализа: 6000 кадров/сутки.</p>
+            <p id="maintenance-status" class="muted">Очистка подготовлена.</p>
+            <p class="muted">Модель огня и дыма экспериментальная. Проверенного детектора ДТП пока нет. Регистрация в хостинге и разрешение браузерных уведомлений выполняются владельцем.</p>
           </article>
         </section>
       </main>

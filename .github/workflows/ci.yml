@@ -18,5 +18,17 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
-      - run: python3 -m py_compile collector/collector.py collector/publisher.py collector/botkeep/main.py tools/build-botkeep.py tools/generate_media.py
+      - run: python3 -m py_compile collector/collector.py collector/publisher.py collector/outbox.py collector/collision.py collector/botkeep/main.py tools/build-botkeep.py tools/generate_media.py
       - run: python3 tools/test_publisher.py
+      - name: Prepare isolated collector test environment
+        run: |
+          python3 -m venv /tmp/roadwatch-ci-venv
+          /tmp/roadwatch-ci-venv/bin/pip install -r collector/botkeep/requirements.txt
+      - name: Collector mechanics and retry queue
+        run: |
+          /tmp/roadwatch-ci-venv/bin/python tools/test_collector.py
+          /tmp/roadwatch-ci-venv/bin/python tools/test_runtime.py
+      - name: Synthetic collector to Worker video round trip
+        env:
+          CV_PYTHON: /tmp/roadwatch-ci-venv/bin/python
+        run: node tools/collector-e2e.mjs

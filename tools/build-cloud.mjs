@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import { resolve, dirname, extname } from "node:path";
+import {build} from "esbuild";
 const root = resolve(import.meta.dirname, "..");
 const destination = resolve(process.argv[2] || resolve(root, "cloud-build"));
 const types = {
@@ -8,6 +9,9 @@ const types = {
   ".css": "text/css; charset=utf-8",
   ".jpg": "image/jpeg",
   ".mp4": "video/mp4",
+  ".zip": "application/zip",
+  ".svg":"image/svg+xml",
+  ".webmanifest":"application/manifest+json",
 };
 const assets = {};
 async function visit(directory, prefix = "") {
@@ -61,7 +65,7 @@ await writeFile(
   resolve(destination, "dist/.openai/hosting.json"),
   JSON.stringify(manifest, null, 2) + "\n",
 );
-const bundle =
+const entry =
   "const STATIC_ASSETS=" +
   JSON.stringify(assets) +
   ";\nconst CAMERA_CONFIG=" +
@@ -72,6 +76,8 @@ const bundle =
   staticHandler +
   "\n" +
   worker;
+const built=await build({stdin:{contents:entry,sourcefile:'worker.mjs',resolveDir:resolve(root,'cloud')},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false});
+const bundle=built.outputFiles[0].text;
 await writeFile(resolve(destination, "dist/server/index.js"), bundle);
 await writeFile(
   resolve(destination, "drizzle/0000_roadwatch.sql"),
