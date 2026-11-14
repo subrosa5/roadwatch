@@ -19,7 +19,7 @@ jobs:
       - name: Decode one public frame and benchmark within free-host limits
         run: >-
           docker run --rm --cpus=0.5 --memory=512m --memory-swap=512m
-          --pids-limit=64 --read-only
+          --pids-limit=64 --read-only --env ROADWATCH_TRACKING_LOAD_TEST=1
           --tmpfs /tmp:rw,size=64m
           --tmpfs /app/data:rw,size=128m,uid=10001,gid=10001,mode=0700
           roadwatch-probe

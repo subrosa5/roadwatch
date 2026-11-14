@@ -8,3 +8,5 @@ The original model card declares MIT for its weights and CC-BY 4.0 for the sourc
 The model is an experimental baseline for fire and smoke, not collision detection. Its author notes a small smoke validation set. No Iowa accuracy, calibrated probability or emergency response guarantee is claimed.
 
 OpenCV, NumPy, Requests, python-dotenv and imageio-ffmpeg retain their upstream licenses. The imageio-ffmpeg wheel includes a platform FFmpeg executable; its build configuration and license notices remain applicable. No system package installation or root permission is required by the startup script itself.
+
+Vehicle detector: OpenCV Zoo NanoDet, Apache-2.0, upstream revision 48b10fa505aeb51fbd127fc60a5c660040e823b7. Vendored Python adapter and full license: vendor/nanodet.py and vendor/NANODET_LICENSE. Weights are downloaded from the pinned upstream revision with SHA-256 verification, not included in the archive. https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/object_detection_nanodet . COCO class outputs are filtered to vehicles; no person/identity output is used.

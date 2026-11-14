@@ -534,8 +534,10 @@ async function retention(env) {
   for(const camera of CAMERA_CONFIG.filter(c=>!c.demo)) {
     const object=await env.BUCKET.head('previews/'+camera.id+'.jpg');
     if(object && Date.parse(object.customMetadata?.captured_at||'')<Date.now()-86400000)await env.BUCKET.delete('previews/'+camera.id+'.jpg');
+    const track=await env.BUCKET.head('tracking/'+camera.id+'.json');
+    if(track && Date.parse(track.customMetadata?.captured_at||'')<Date.now()-86400000)await env.BUCKET.delete('tracking/'+camera.id+'.json');
   }
-  await stmt(env,"DELETE FROM rw_probes WHERE checked_at<? AND (source_id LIKE 'pushq:%' OR source_id LIKE 'preview-quota:%' OR source_id LIKE 'view:%')",cutoff).run();
+  await stmt(env,"DELETE FROM rw_probes WHERE checked_at<? AND (source_id LIKE 'pushq:%' OR source_id LIKE 'preview-quota:%' OR source_id LIKE 'tracking-quota:%' OR source_id LIKE 'view:%')",cutoff).run();
   return json({
     expired_clips: expired.length,
     pruned_observations: pruned.meta.changes,
@@ -566,12 +568,13 @@ export function createWorker(fetcher = fetch) {
         if(path==='/api/ops/maintenance'&&request.method==='POST')return json(await maintenance(env,fetcher,u.origin,true));
         if(path==='/api/push/settings'&&request.method==='GET')return json(await rt.pushSettings());
         if(path==='/api/push/subscription'&&['POST','DELETE'].includes(request.method))return json(await rt.subscribe(request,auth));
-        let activeRoute=path.match(/^\/api\/cameras\/([a-z0-9-]{1,80})\/(heartbeat|view|demand|preview)$/);
+        let activeRoute=path.match(/^\/api\/cameras\/([a-z0-9-]{1,80})\/(heartbeat|view|demand|preview|tracking)$/);
         if(activeRoute){
           const [,id,action]=activeRoute;
           if(action==='heartbeat'&&request.method==='POST')return json(await rt.heartbeat(id,request,auth));
           if(action==='view'&&['POST','DELETE'].includes(request.method))return json(await rt.viewing(id,request,auth));
           if(action==='demand'&&request.method==='GET')return json(await rt.demand(id,auth));
+          if(action==='tracking'&&['GET','POST'].includes(request.method))return json(await rt.tracking(id,request,auth));
           if(action==='preview'&&['GET','POST'].includes(request.method))return json(await rt.preview(id,request,auth));
         }
         if (path === "/api/ops/init" && request.method === "POST")
@@ -631,7 +634,7 @@ export function createWorker(fetcher = fetch) {
             monitoring: cs.some(c=>!c.demo && c.collector?.online),
             model_ready: cs.some(c=>!c.demo && c.collector?.online),
             preview_quota: (await rt.read('preview-quota:'+now().slice(0,10)))?.count||0,
-            preview_daily_limit:6000,
+            preview_daily_limit:6000,tracking_daily_limit:24000,tracking_quota:(await rt.read('tracking-quota:'+now().slice(0,10)))?.count||0,
             maintenance:await rt.read('maintenance:retention'),
           });
         }

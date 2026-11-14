@@ -78,6 +78,16 @@ def preflight(config, model):
         start = time.process_time()
         detections = detector.infer(result.stdout)
         samples.append((time.process_time() - start) * 1000)
+    from vehicles import VehicleDetector, VehicleTracker
+    vehicle=VehicleDetector(config['vehicle_model'])
+    vehicle_samples=[];vehicle_detections=[]
+    import numpy as np
+    image=cv2.imdecode(np.frombuffer(result.stdout,np.uint8),cv2.IMREAD_COLOR)
+    tracker=VehicleTracker(vehicle)
+    for i in range(12):
+        start=time.process_time();vehicle_detections=tracker.update(image,i*.2)
+        vehicle_samples.append((time.process_time()-start)*1000)
+    vehicle_cpu_ms=max(vehicle_samples)
     # Conservative sum of process high-water marks, not a cgroup measurement.
     memory = rss_mb() + rss_mb(resource.RUSAGE_CHILDREN)
     cpu_ms = statistics.median(samples[1:])
@@ -87,9 +97,45 @@ def preflight(config, model):
             "model_sha256": model["sha256"], "labels": model["labels"],
             "opencv": cv2.__version__, "inference_cpu_ms": cpu_ms,
             "rss_upper_estimate_mib": memory, "detections_on_probe": len(detections),
-            "resource_gate_passed": cpu_ms < 1000 and memory < 350,
+            "vehicle_tracking_cpu_ms_max":vehicle_cpu_ms,"vehicle_detections":len(vehicle_detections),
+            "vehicle_tracking_tested":True,
+            "resource_gate_passed": cpu_ms < 1000 and vehicle_cpu_ms < 150 and memory < 350,
             "accuracy_validated": False, "dtp_detector": False,
             "monitoring_started": False}
+
+
+def tracking_load(config,model):
+    """Bounded real-stream throughput test, no private API or synthetic detections."""
+    from collector import recording_command
+    from vehicles import VehicleDetector,VehicleTracker
+    fire=Detector([model]);tracker=VehicleTracker(VehicleDetector(config['vehicle_model']))
+    import cv2,numpy as np
+    frames=0;tracked=0;last_hash=None;first=None;last_fire=-1e9;started=time.monotonic();cpu=time.process_time()
+    with tempfile.TemporaryDirectory(dir=ROOT/'data') as temporary:
+        directory=Path(temporary)
+        process=subprocess.Popen(recording_command(config['cameras'][0]['stream_url'],directory,5,imageio_ffmpeg.get_ffmpeg_exe()),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        try:
+            while time.monotonic()-started<45 and (first is None or time.monotonic()-first<20):
+                time.sleep(.02);path=directory/'frame.jpg'
+                if not path.exists():continue
+                with path.open('rb') as f:jpeg=f.read();timestamp=os.fstat(f.fileno()).st_mtime
+                hashed=hashlib.sha256(jpeg).hexdigest()
+                if hashed==last_hash:continue
+                last_hash=hashed
+                if first is None:first=time.monotonic()
+                image=cv2.imdecode(np.frombuffer(jpeg,np.uint8),cv2.IMREAD_COLOR)
+                tracks=tracker.update(image,timestamp);tracked+=len(tracks);frames+=1
+                if timestamp-last_fire>=5:fire.infer(jpeg);last_fire=timestamp
+                if process.poll() is not None:break
+        finally:
+            process.terminate()
+            try:process.wait(timeout=8)
+            except subprocess.TimeoutExpired:process.kill();process.wait()
+    duration=time.monotonic()-first if first else 0
+    rate=frames/duration if duration else 0
+    result={'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=3 and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<350}
+    print(json.dumps(result),flush=True)
+    if not result['throughput_gate_passed']:raise RuntimeError('Real tracking throughput gate did not pass')
 
 
 def main():
@@ -104,12 +150,17 @@ def main():
     download_model(lock, model_path)
     model = {k: lock[k] for k in ["sha256", "labels", "size", "threshold"]}
     model["path"] = str(model_path)
+    vehicle_lock=json.loads((ROOT/'vehicle.lock.json').read_text())
+    vehicle_path=ROOT/'data/models/vehicles.onnx'
+    download_model(vehicle_lock,vehicle_path)
+    config['vehicle_model']={**vehicle_lock,'path':str(vehicle_path)}
     PHASE = "camera_and_model_preflight"
     report = preflight(config, model)
     (ROOT / "data/preflight.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report), flush=True)
     if not report["resource_gate_passed"]:
         raise RuntimeError("Resource gate did not pass")
+    if os.environ.get("ROADWATCH_TRACKING_LOAD_TEST")=="1":tracking_load(config,model)
     if mode == "preflight": return
     PHASE = "runtime_configuration"
     if not report["camera_network_test"]:

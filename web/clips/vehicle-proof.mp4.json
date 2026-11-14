@@ -1,0 +1,13 @@
+{
+  "recorded_sample": true,
+  "live": false,
+  "synthetic_detections": false,
+  "model_sha256": "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186",
+  "sample_frames": 22,
+  "frames_with_tracks": 15,
+  "detector_tracks": 2,
+  "flow_tracks": 13,
+  "distinct_track_ids": 2,
+  "cpu_seconds": 0.357585,
+  "quality_validated": false
+}

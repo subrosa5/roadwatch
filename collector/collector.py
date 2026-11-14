@@ -24,9 +24,11 @@ import requests
 try:
     from .publisher import Publisher, PublicationBudgetError
     from .outbox import ClipOutbox
+    from .vehicles import VehicleDetector, VehicleTracker
 except ImportError:
     from publisher import Publisher, PublicationBudgetError
     from outbox import ClipOutbox
+    from vehicles import VehicleDetector, VehicleTracker
 
 LABELS = {"vehicle", "collision", "smoke", "fire"}
 
@@ -141,7 +143,7 @@ class Api:
 
 
 def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
-    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-rw_timeout", "10000000", "-threads", "1", "-i", url,
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-rw_timeout", "10000000", "-threads", "1", "-re", "-i", url,
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "segment", "-segment_time", "2",
             "-segment_list", str(directory / "segments.csv"), "-segment_list_size", "30", "-segment_wrap", "30",
             "-segment_format", "mpegts", str(directory / "segment-%03d.ts"),
@@ -225,6 +227,8 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     ffmpeg = settings.get("ffmpeg", "ffmpeg")
     process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     last_hash = None
+    last_incident=-float('inf')
+    tracker=VehicleTracker(VehicleDetector(settings['vehicle_model'])) if settings.get('vehicle_model') else None
     clips = set()
     try:
         while process.returncode is None:
@@ -256,7 +260,11 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 if cpu_budget["seconds"] >= settings.get("daily_inference_cpu_seconds", 240):
                     raise RuntimeError("Collector stopped: configured inference CPU budget exhausted")
                 start = time.process_time()
-                detections = detector.infer(jpeg)
+                image=cv2.imdecode(np.frombuffer(jpeg,np.uint8),cv2.IMREAD_COLOR) if tracker else None
+                tracks=tracker.update(image,frame_mtime) if tracker else []
+                do_incident=frame_mtime-last_incident>=settings.get('incident_interval_seconds',0)
+                detections=detector.infer(jpeg) if do_incident else []
+                if do_incident:last_incident=frame_mtime
                 cpu_budget["seconds"] += time.process_time() - start
                 ledger = Path(settings["buffer_root"]) / "cpu-budget.json"
                 temporary = ledger.with_suffix('.tmp')
@@ -267,6 +275,9 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 state['last_error'] = None
             captured_at = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
             data = {"camera_id": camera["id"], "frame_id": frame_hash, "captured_at": captured_at, "detections": detections, "model": settings["model_version"], "clock": "collector_arrival"}
+            if tracker:
+                state['tracking_latest']=({**data,'detections':tracks,'model':settings.get('vehicle_model_version','opencv-nanodet-2022nov+LK-v1')},jpeg)
+            if not do_incident:continue
             state['latest'] = (data,jpeg)
             try:
                 admitted = await asyncio.to_thread(publisher.handle, data, jpeg)
@@ -332,7 +343,7 @@ async def main(config_path):
             if time.monotonic()-last_sent<60 and state["state"]==last_state:
                 await asyncio.sleep(1);continue
             payload={k:state[k] for k in ['state','frames_analyzed','last_frame_at','last_error']}
-            payload.update(cpu_seconds=budget['seconds'],uptime_seconds=time.monotonic()-started,fps=config.get('fps',.2),model=config['model_version'],capabilities=['fire','smoke'])
+            payload.update(cpu_seconds=budget['seconds'],uptime_seconds=time.monotonic()-started,fps=config.get('fps',.2),model=config['model_version'],capabilities=['fire','smoke']+(['vehicle_tracking'] if config.get('vehicle_model') else []))
             try:
                 await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/heartbeat',json=payload)
                 if time.monotonic()>=next_cleanup:
@@ -349,7 +360,8 @@ async def main(config_path):
             try:
                 demand=await asyncio.to_thread(api.get,'/api/cameras/'+camera['id']+'/demand')
                 state['view_active']=demand.get('active',False)
-                if state['view_active'] and state['latest'] and quota_day!=today:
+                state['view_kind']=demand.get('kind','analysis')
+                if state['view_active'] and state.get('view_kind')=='analysis' and state['latest'] and quota_day!=today:
                     data,jpeg=state['latest']
                     if data['frame_id']!=sent:
                         import base64
@@ -358,6 +370,20 @@ async def main(config_path):
             except PublicationQuotaError: quota_day=today
             except RetryableApiError: pass
             await asyncio.sleep(5)
+    async def tracking_previews(camera):
+        state=states[camera['id']];sent=None;quota_day=None
+        while True:
+            today=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
+            if state.get('view_active') and state.get('view_kind')=='tracking' and state.get('tracking_latest') and quota_day!=today:
+                data,jpeg=state['tracking_latest']
+                if data['frame_id']!=sent:
+                    try:
+                        import base64
+                        await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/tracking',json={'observation':data,'jpeg':base64.b64encode(jpeg).decode()})
+                        sent=data['frame_id']
+                    except PublicationQuotaError:quota_day=today
+                    except RetryableApiError:pass
+            await asyncio.sleep(.2)
     async def uploads():
         while True:
             try: await asyncio.to_thread(outbox.flush_one)
@@ -365,7 +391,7 @@ async def main(config_path):
                 await asyncio.sleep(30)
             await asyncio.sleep(10)
     for camera in enabled:
-        tasks.extend([asyncio.create_task(supervise(camera)),asyncio.create_task(telemetry(camera)),asyncio.create_task(previews(camera))])
+        tasks.extend([asyncio.create_task(supervise(camera)),asyncio.create_task(telemetry(camera)),asyncio.create_task(previews(camera)),asyncio.create_task(tracking_previews(camera))])
     tasks.append(asyncio.create_task(uploads()))
     try:
         await asyncio.gather(*tasks)

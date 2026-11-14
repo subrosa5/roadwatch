@@ -1,0 +1,9 @@
+{
+  "id": "opencv/object_detection_nanodet",
+  "revision": "48b10fa505aeb51fbd127fc60a5c660040e823b7",
+  "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/object_detection_nanodet/object_detection_nanodet_2022nov.onnx",
+  "bytes": 3800954,
+  "sha256": "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186",
+  "threshold": 0.35,
+  "license": "Apache-2.0"
+}

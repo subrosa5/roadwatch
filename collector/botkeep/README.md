@@ -20,9 +20,9 @@ Botkeep docs: https://botkeep.cloud/docs/python and https://botkeep.cloud/docs/z
 
 ## Publication and resource bounds
 
-One camera: CBTV51, 480×270 HLS from Iowa DOT. Model input: 320×320, fire/smoke only. Source coordinates and attribution remain in the main Roadwatch project. The model's score is not a calibrated probability. Collision detection is not implemented by this model.
+One camera: CBTV51, 480×270 HLS from Iowa DOT. Fire/smoke model input: 320×320. The additional 3.8 MB NanoDet uses 416×416 input and COCO car/motorcycle/bus/truck classes. Source coordinates and attribution remain in the main Roadwatch project. The model's score is not a calibrated probability. Collision detection is not implemented by this model.
 
-The collector samples one distinct frame every five seconds. Intermediate inference stays local. During quiet operation, a heartbeat and matching JPEG are published once every 15 minutes: 96 observations/day. Two distinct incident frames within six seconds are required. Tentative incident frames are held until confirmation, so an initial heartbeat cannot overwrite the first confirmation frame. Persistent local cooldown suppresses repeated pairs within two minutes. Daily admission is at most 400 publication attempts and 5 clip uploads, reserving space below the backend's 500-record cap. An ambiguous request consumes a local reservation. Backend limits remain authoritative if ephemeral host files are lost.
+The cloud collector samples at 5 fps for vehicle tracking. NanoDet detects COCO vehicles every 0.5 seconds; forward/backward checked optical flow follows measured motion between detector frames. Fire/smoke inference remains once every five seconds. Intermediate processing stays on the cloud host. During quiet operation, a heartbeat and matching JPEG are published once every 15 minutes: 96 observations/day. Two distinct incident frames within six seconds are required. Tentative incident frames are held until confirmation, so an initial heartbeat cannot overwrite the first confirmation frame. Persistent local cooldown suppresses repeated pairs within two minutes. Daily admission is at most 400 publication attempts and 5 clip uploads, reserving space below the backend's 500-record cap. An ambiguous request consumes a local reservation. Backend limits remain authoritative if ephemeral host files are lost.
 
 The process has a 30-segment FFmpeg ring bounded by configured segment count (30 × about 2 seconds; source keyframes can lengthen segments). The compressed-data estimate of one minute is around 1 MB at the previously observed average bitrate; total memory includes the decoder/model. Clips cover available pre/post segments; pre-roll is unavailable until the buffer has filled and is not guaranteed across restarts. H.264 clips are remuxed with codec copy instead of re-encoding/upscaling, reducing CPU and preserving source quality. Stop or reduce the workload if host resource limits are exceeded.
 
@@ -36,6 +36,13 @@ A separate runtime heartbeat reports collector activity every minute; stale arch
 
 `python3 tools/build-botkeep.py /absolute/path/roadwatch-botkeep.zip`
 
-The builder includes nine explicitly named source/configuration files, including this README and third-party notices. It excludes `.env`, tokens, Git metadata, model binaries, recordings, node_modules and runtime data.
+The builder includes thirteen explicitly named source/configuration files, including this README and third-party notices. It excludes `.env`, tokens, Git metadata, model binaries, recordings, node_modules and runtime data.
 
 Development-only local fixture override: `ROADWATCH_PREFLIGHT_VIDEO=/path/to/local.mp4`. A fixture probe is marked `camera_network_test=false` and cannot start monitoring in run mode.
+
+
+## Vehicle tracking display
+
+Select «Транспорт · трекинг» on CBTV51 after the cloud runtime starts. A matching image/track-ID pair is relayed through the private API; the browser only renders it. It performs no ML inference. Original HLS is an independent viewing mode. Tracking targets 5 processed frames/second; actual delivery depends on the host, API latency and source. This is not a 25–30 fps stream.
+
+Tracking display has an independent 24000 frame/day cap: up to 80 minutes/day at the full 5 fps publication rate. The cap limits display uploads, not background inference or incident collection. Uploads require an active viewer lease. If frames age beyond three seconds, the frontend removes tracking rather than displaying stale boxes. IDs are short-term camera tracks, not permanent identities; gaps, occlusions, false detections and camera movement can change them. A recorded real-model sample is supplied separately and explicitly marked NOT LIVE.

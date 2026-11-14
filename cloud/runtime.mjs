@@ -19,7 +19,7 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     if(!finite(raw.frames_analyzed,0,1e10)||!finite(raw.cpu_seconds,0,1e9)||!finite(raw.uptime_seconds,0,1e9)||!finite(raw.fps,.1,30))fail('Invalid collector counters');
     let last=null;try{last=raw.last_frame_at===null?null:new Date(raw.last_frame_at).toISOString();}catch{fail("Invalid frame time");}
     if(last && (Date.parse(last)>Date.now()+5000 || Date.parse(last)<Date.now()-86400000))fail('Invalid frame time');
-    const data={camera_id:id,state:raw.state,frames_analyzed:raw.frames_analyzed,cpu_seconds:raw.cpu_seconds,uptime_seconds:raw.uptime_seconds,fps:raw.fps,last_frame_at:last,model:String(raw.model||'').slice(0,120),capabilities:Array.isArray(raw.capabilities)?raw.capabilities.filter(x=>['fire','smoke','collision_experimental'].includes(x)).slice(0,3):[],last_error:['network','stream','inference','auth','quota',null].includes(raw.last_error)?raw.last_error:null};
+    const data={camera_id:id,state:raw.state,frames_analyzed:raw.frames_analyzed,cpu_seconds:raw.cpu_seconds,uptime_seconds:raw.uptime_seconds,fps:raw.fps,last_frame_at:last,model:String(raw.model||'').slice(0,120),capabilities:Array.isArray(raw.capabilities)?raw.capabilities.filter(x=>['fire','smoke','collision_experimental','vehicle_tracking'].includes(x)).slice(0,3):[],last_error:['network','stream','inference','auth','quota',null].includes(raw.last_error)?raw.last_error:null};
     await write('collector:'+id,data);
     return {stored:true,received_at:now()};
   }
@@ -32,12 +32,13 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
   async function viewing(id,request,auth) {
     await camera(id);
     if(request.method==='DELETE') {await stmt(env,'DELETE FROM rw_probes WHERE source_id=?','view:'+id).run();return {active:false};}
-    const until=new Date(Date.now()+35000).toISOString();await write('view:'+id,{until});return {active:true,until};
+    const raw=await bodyJSON(request),kind=raw.kind||'analysis';if(!['analysis','tracking'].includes(kind))fail('Invalid viewer mode');
+    const until=new Date(Date.now()+35000).toISOString();await write('view:'+id,{until,kind});return {active:true,until};
   }
   async function demand(id,auth) {
     if(!auth.service)fail('Collector role required',403);
     await camera(id);
-    const v=await read('view:'+id);return {active:!!v&&Date.parse(v.until)>Date.now(),until:v?.until||null,preview_interval_seconds:5};
+    const v=await read('view:'+id);return {active:!!v&&Date.parse(v.until)>Date.now(),until:v?.until||null,kind:v?.kind||'analysis',preview_interval_seconds:5};
   }
   async function preview(id,request,auth) {
     await camera(id);
@@ -63,6 +64,31 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     if(new TextEncoder().encode(JSON.stringify(o)).length>1700)fail('Preview metadata too large');
     await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:'image/jpeg'},customMetadata:{observation:JSON.stringify(o),captured_at:o.captured_at}});
     return {stored:true,frame_id:o.frame_id,detections_returned:o.detections.length,detections_total:total};
+  }
+  async function tracking(id,request,auth) {
+    await camera(id);const key='tracking/'+id+'.json';
+    if(request.method==='GET') {
+      const object=await env.BUCKET.get(key);if(!object)fail('No tracking frames yet',404);
+      const data=JSON.parse(await new Response(object.body).text());
+      return {...data,stale:Date.now()-Date.parse(data.observation.captured_at)>3000};
+    }
+    if(!auth.service)fail('Collector role required',403);
+    const view=await demand(id,auth);if(!view.active||view.kind!=='tracking')return {stored:false,reason:'no_viewer'};
+    const raw=await bodyJSON(request),o=observation(raw.observation);
+    if(o.camera_id!==id||o.detections.some(d=>d.label!=='vehicle'))fail('Invalid tracking camera or labels');
+    if(Date.now()-Date.parse(o.captured_at)>5000)fail('Tracking frame too old');
+    let bytes;try{if(typeof raw.jpeg!=='string'||raw.jpeg.length>350000)throw Error();bytes=Uint8Array.from(atob(raw.jpeg),c=>c.charCodeAt(0));}catch{fail('Invalid tracking JPEG');}
+    if(bytes.length>256*1024||bytes[0]!==255||bytes[1]!==216||bytes[2]!==255)fail('JPEG required');
+    if(await sha256(bytes)!==o.frame_id)fail('Tracking frame hash mismatch');
+    o.detections=o.detections.map((d,i)=>{
+      const source=raw.observation.detections[i];
+      if(typeof source.track_id!=='string'||! /^[a-zA-Z0-9-]{1,60}$/.test(source.track_id)||!['detector','optical_flow'].includes(source.tracking_method))fail('Invalid tracking identity');
+      return {...d,track_id:source.track_id,tracking_method:source.tracking_method};
+    });
+    const reserved=await stmt(env,`INSERT INTO rw_probes(source_id,checked_at,data) VALUES(?,?,json_object('count',1)) ON CONFLICT(source_id) DO UPDATE SET checked_at=excluded.checked_at,data=json_set(rw_probes.data,'$.count',json_extract(rw_probes.data,'$.count')+1) WHERE json_extract(rw_probes.data,'$.count')<24000`,'tracking-quota:'+now().slice(0,10),now()).run();
+    if(!reserved.meta.changes)fail('Daily tracking display quota reached',429);
+    await env.BUCKET.put(key,new TextEncoder().encode(JSON.stringify({observation:o,jpeg:raw.jpeg})),{httpMetadata:{contentType:'application/json'},customMetadata:{captured_at:o.captured_at}});
+    return {stored:true,frame_id:o.frame_id};
   }
   async function pushSettings() {
     const {publicKey}=await signingKey(env.INGEST_TOKEN);
@@ -113,5 +139,5 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     }
     return result;
   }
-  return {read,write,heartbeat,health,viewing,demand,preview,pushSettings,subscribe,queueStatement,dispatch};
+  return {read,write,heartbeat,health,viewing,demand,preview,tracking,pushSettings,subscribe,queueStatement,dispatch};
 }

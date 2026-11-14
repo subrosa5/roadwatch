@@ -159,7 +159,7 @@
                     >SYNTHETIC / 12s LOOP</span
                   >
                 </div>
-                <div id="view-modes" class="view-modes" hidden><button id="mode-live" class="selected">Живое видео</button><button id="mode-analysis">Анализ кадра</button></div>
+                <div id="view-modes" class="view-modes" hidden><button id="mode-live" class="selected">Живое видео</button><button id="mode-tracking">Транспорт · трекинг</button><button id="mode-analysis">Огонь / дым</button></div>
                 <div class="viewport" id="viewport">
                   <video
                     id="camera-video"
@@ -520,7 +520,7 @@
             <h2>Завершить облачный запуск</h2>
             <p id="collector-status" class="inline-note">Активность коллектора не подтверждена.</p>
             <ol><li>Войти в Botkeep и выбрать бесплатный Python-сервер.</li><li>Импортировать <a href="./downloads/roadwatch-botkeep.zip" download>готовый пакет запуска ZIP</a>. Команда: <code>python main.py</code>.</li><li>Первый запуск выполнит проверку. Затем добавить секреты подключения и установить <code>ROADWATCH_MODE=run</code>.</li><li>Проверить здесь статус и свежий проанализированный кадр.</li></ol>
-            <p id="preview-budget" class="muted">Квота просмотра анализа: 6000 кадров/сутки.</p>
+            <p id="tracking-status" class="muted">Облачное сопровождение транспорта: требуется запуск коллектора.</p><p><a href="./clips/vehicle-proof.mp4" target="_blank" rel="noopener">Записанный тест реального детектора и трекера · не live ↗</a></p><p id="preview-budget" class="muted">Квота просмотра анализа: 6000 кадров/сутки.</p>
             <p id="maintenance-status" class="muted">Очистка подготовлена.</p>
             <p class="muted">Модель огня и дыма экспериментальная. Проверенного детектора ДТП пока нет. Регистрация в хостинге и разрешение браузерных уведомлений выполняются владельцем.</p>
           </article>

@@ -255,10 +255,10 @@ async function releaseView() {
  if(id)try{await request('/api/cameras/'+id+'/view',{method:'DELETE'});}catch{}
 }
 async function acquireView() {
- if(!hosted||!selected?.enabled||viewMode!=='analysis'||document.hidden)return;
- if(viewLease?.id===selected.id && Date.now()-viewLease.at<15000)return;
- await request('/api/cameras/'+selected.id+'/view',{method:'POST'});
- viewLease={id:selected.id,at:Date.now()};
+ if(!hosted||!selected?.enabled||!['analysis','tracking'].includes(viewMode)||document.hidden)return;
+ if(viewLease?.id===selected.id && viewLease.kind===viewMode && Date.now()-viewLease.at<15000)return;
+ await request('/api/cameras/'+selected.id+'/view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:viewMode})});
+ viewLease={id:selected.id,kind:viewMode,at:Date.now()};
 }
 function showFrame(meta,blob) {
  const id=selected?.id,url=URL.createObjectURL(blob),old=frameBlob;
@@ -285,12 +285,37 @@ async function refreshPreview() {
   if(selected?.id===id&&!displayFrameId){$('video-unavailable').textContent='Ожидаем проанализированный кадр от облачного коллектора';$('video-unavailable').hidden=false;}
  }finally{previewBusy=false;}
 }
-for(const modeName of ['live','analysis'])$('mode-'+modeName).addEventListener('click',async()=>{
- viewMode=modeName;displayFrameId=null;displayObservation=null;
+let trackingBusy=false,nextTrackingPoll=0;
+async function refreshTracking(){
+ if(Date.now()<nextTrackingPoll||trackingBusy||viewMode!=='tracking'||document.hidden||!selected?.enabled)return;
+ const id=selected.id;trackingBusy=true;
+ try{
+  await acquireView();
+  const data=await(await request('/api/cameras/'+id+'/tracking')).json();
+  if(selected?.id!==id||viewMode!=='tracking')return;
+  if(data.stale){nextTrackingPoll=Date.now()+5000;displayObservation=null;displayFrameId=null;$('video-unavailable').hidden=false;$('video-unavailable').textContent='Поток анализа устарел. Сопровождение не подтверждено.';return;}
+  if(displayFrameId!==data.observation.frame_id){
+   const bytes=Uint8Array.from(atob(data.jpeg),c=>c.charCodeAt(0));
+   showFrame(data.observation,new Blob([bytes],{type:'image/jpeg'}));
+  }
+  $('scene-tag').textContent='ОБЛАЧНЫЙ ТРЕКИНГ · ID ТРАНСПОРТА';
+  $('model-name').textContent=data.observation.model;
+  $('analysis-note').textContent='Реальный NanoDet находит транспорт; optical flow ведёт его между детекциями. ID относится к текущему проходу камеры, после потери объекта может измениться. Рамки и изображение получены вместе из облака.';
+ }catch{
+  if(selected?.id===id&&viewMode==='tracking'){
+   nextTrackingPoll=Date.now()+5000;displayObservation=null;displayFrameId=null;$('video-unavailable').hidden=false;
+   $('video-unavailable').textContent='Нет облачных кадров сопровождения. Запусти коллектор по инструкции «Источники»; браузер не выполняет inference.';
+  }
+ }finally{trackingBusy=false;}
+}
+setInterval(()=>void refreshTracking(),200);
+setInterval(()=>{if(viewMode==='analysis')void refreshPreview();},5000);
+for(const modeName of ['live','analysis','tracking'])$('mode-'+modeName).addEventListener('click',async()=>{
+ viewMode=modeName;nextTrackingPoll=0;displayFrameId=null;displayObservation=null;
  if(modeName==='live')void releaseView();
  if(selected)await selectCamera(selected.id);
 });
-document.addEventListener('visibilitychange',()=>{if(document.hidden)void releaseView();else if(viewMode==='analysis')void refreshPreview();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)void releaseView();else if(viewMode==='analysis')void refreshPreview();else if(viewMode==='tracking')void refreshTracking();});
 configurePush({button:$('push-button'),status:$('push-state'),request,hosted:()=>hosted});
 async function selectCamera(id) {
   if(viewLease?.id && viewLease.id!==id)void releaseView();
@@ -301,11 +326,13 @@ async function selectCamera(id) {
   $("camera-name").textContent = selected.name;
   const demo = mode === "demo";
   const stream = !demo ? publicStream(selected.stream_url) : null;
-  const analysis=!!stream && hosted && viewMode==='analysis' && !!selected.enabled;
+  const analysis=!!stream && hosted && ['analysis','tracking'].includes(viewMode) && !!selected.enabled;
   const live = !!stream && !analysis;
   $('view-modes').hidden=!stream||!hosted;
   $('mode-analysis').disabled=!selected.enabled;
-  $('mode-analysis').classList.toggle('selected',analysis);
+  $('mode-tracking').disabled=!selected.enabled;
+  $('mode-tracking').classList.toggle('selected',analysis&&viewMode==='tracking');
+  $('mode-analysis').classList.toggle('selected',analysis&&viewMode==='analysis');
   $('mode-live').classList.toggle('selected',live);
   if(!analysis && viewLease)void releaseView();
   let embed = null;
@@ -377,15 +404,15 @@ async function selectCamera(id) {
     $("video-label").textContent = selected.collector?.online?"IOWA DOT · HLS · КОЛЛЕКТОР АКТИВЕН":"IOWA DOT · HLS · CV НЕ ПОДКЛЮЧЁН";
     $("analysis-note").textContent =
       selected.collector?.online
-      ? "Коллектор активен. Открой «Анализ кадра», чтобы увидеть рамки на соответствующем JPEG. Живое видео идёт отдельно от анализа."
-      : "Прямой публичный поток Iowa DOT. Активность облачного коллектора не подтверждена. Время плеера показывает получение кадра браузером.";
+      ? "Коллектор активен. Открой «Транспорт · трекинг» для облачных рамок и ID машин или «Огонь / дым» для анализа происшествий."
+      : "Прямой поток Iowa DOT. Для облачного трекинга запусти коллектор по инструкции на вкладке «Источники». Без него транспорт не анализируется.";
     $("live-owner").href = selected.source_page;
     livePlayer.connect(stream);
   } else if (analysis) {
     $('camera-video').pause();
-    $('video-label').textContent='АНАЛИЗ · ОТДЕЛЬНЫЕ КАДРЫ';
+    $('video-label').textContent=viewMode==='tracking'?'ОБЛАЧНОЕ СОПРОВОЖДЕНИЕ ТРАНСПОРТА':'АНАЛИЗ · ОТДЕЛЬНЫЕ КАДРЫ';
     $('analysis-note').textContent='Рамки соответствуют только показанному кадру. Время — получение изображения коллектором; оценки модели не являются вероятностью происшествия.';
-    await refreshPreview();
+    if(viewMode==='tracking')await refreshTracking();else await refreshPreview();
   } else if (embed) {
     $("scene-tag").textContent = "ПЛЕЕР ВЛАДЕЛЬЦА";
     $("video-label").textContent = "PUBLIC EMBED · CV НЕ ПОДКЛЮЧЁН";
@@ -458,6 +485,7 @@ async function refresh() {
     $('feed-status').textContent=online?'Коллектор активен. Здесь появятся подтверждённые кандидаты; каждое событие требует проверки оператором.':'Активность коллектора не подтверждена. Для фонового анализа нужен облачный запуск из инструкции.';
     $('source-summary').textContent=`Видео: 2 · CV: ${online}`;
     $('source-cbtv51').textContent=cameras.find(c=>c.id==='iowa-cbtv51')?.collector?.online?'Коллектор активен':'Ожидает запуска';
+    $('tracking-status').textContent=`Сопровождение транспорта: ${stats.tracking_quota??0} / ${stats.tracking_daily_limit??24000} кадров просмотра за сутки. Обработка выполняется в облачном коллекторе.`;
     $('preview-budget').textContent=`Просмотр анализа: ${stats.preview_quota??0} / ${stats.preview_daily_limit??6000} кадров за сутки`;
     $('maintenance-status').textContent=stats.maintenance?.state==='ok'?'Очистка выполнена '+dateTime(stats.maintenance.received_at):'Очистка запускается автоматически при работе коллектора или обращениях к API';
     $("monitor-caption").textContent =
@@ -658,7 +686,7 @@ function draw() {
       ctx.font = "9px ui-monospace, monospace";
       const label =
         (box.label === "vehicle"
-          ? "vehicle"
+          ? "vehicle"+(box.track_id?" #"+box.track_id:"")
           : TYPE[box.label]?.name || box.label) +
         " " +
         Math.round(box.score * 100) +
@@ -678,7 +706,7 @@ function draw() {
     boxes
       .map(
         (b) =>
-          `<span class="${b.label !== "vehicle" ? "hot" : ""}">${esc(b.label)} ${Math.round(b.score * 100)}%</span>`,
+          `<span class="${b.label !== "vehicle" ? "hot" : ""}">${esc(b.label)}${b.track_id?' #'+esc(b.track_id):''} ${Math.round(b.score * 100)}%</span>`,
       )
       .join("") ||
     (mode !== "demo" && !displayObservation
@@ -910,7 +938,7 @@ $("camera-video").addEventListener("error", () => {
 setInterval(() => {
   $("clock").textContent = time(new Date()) + " CT";
 }, 1000);
-setInterval(refresh, 5000);
+setInterval(refresh, 10000);
 renderEvents();
 renderPicker();
 selectCamera(selected.id);

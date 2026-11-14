@@ -397,3 +397,21 @@ test('web push is viewer opt-in, queues only real events, and removes expired su
  const result=await (await s.post('/api/ops/maintenance',{})).json();assert.equal(result.notifications.removed,1);assert.equal(pushed,1);
  assert.equal((await (await s.call('/api/push/settings')).json()).subscriptions,0);
 });
+
+test('tracking keeps real IDs and atomic JPEG, rejects mismatches, and never creates incidents',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ const bytes=Buffer.from([255,216,255,1,2,3]);
+ const hash=await crypto.subtle.digest('SHA-256',bytes);const id=Buffer.from(hash).toString('hex');
+ const o={...obs(id,Date.now(),'vehicle'),camera_id:'iowa-cbtv51',demo:false};o.detections[0]={...o.detections[0],track_id:'session-12',tracking_method:'optical_flow'};
+ const payload={observation:o,jpeg:bytes.toString('base64')};
+ assert.equal((await (await s.post(path+'/tracking',payload)).json()).reason,'no_viewer');
+ await s.post(path+'/view',{kind:'tracking'},true);
+ assert.equal((await s.post(path+'/tracking',payload,true)).status,403);
+ assert.equal((await s.post(path+'/tracking',payload)).status,200);
+ const out=await (await s.call(path+'/tracking')).json();assert.equal(out.observation.detections[0].track_id,'session-12');assert.equal(out.jpeg,payload.jpeg);assert.equal(out.stale,false);
+ assert.equal((await s.post(path+'/tracking',{...payload,observation:{...o,frame_id:'wrong'}})).status,400);
+ assert.equal((await (await s.call('/api/events')).json()).length,0);
+ assert.equal((await (await s.call('/api/stats')).json()).daily_frames,0);
+ s.sql.prepare("UPDATE rw_probes SET data=json_object('count',24000) WHERE source_id LIKE 'tracking-quota:%'").run();
+ assert.equal((await s.post(path+'/tracking',payload)).status,429);
+});
