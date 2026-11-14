@@ -18,6 +18,7 @@ class VehicleDetector:
     def __init__(self,config):
         from pathlib import Path
         if hashlib.sha256(Path(config['path']).read_bytes()).hexdigest()!=config['sha256']:raise ValueError('Vehicle model hash mismatch')
+        self.new_track_threshold=float(config.get('new_track_threshold',config.get('threshold',.35)))
         self.net=NanoDet(config['path'],prob_threshold=config.get('threshold',.35))
         cv2.setNumThreads(1)
     def detect(self,image):
@@ -29,14 +30,18 @@ class VehicleDetector:
             x1,y1=max(0,(row[0]-x)/scale/w),max(0,(row[1]-y)/scale/h)
             x2,y2=min(1,(row[2]-x)/scale/w),min(1,(row[3]-y)/scale/h)
             if x2>x1 and y2>y1:result.append({'label':'vehicle','score':float(row[4]),'box':[float(x1),float(y1),float(x2-x1),float(y2-y1)]})
-        return result[:50]
+        # All vehicle classes share one label and must not duplicate each other.
+        keep=[]
+        for d in sorted(result,key=lambda d:d['score'],reverse=True):
+            if all(iou(d['box'],other['box'])<.45 for other in keep):keep.append(d)
+        return keep[:50]
 
 class VehicleTracker:
     """Detection anchoring + measured optical flow; never extrapolates lost objects."""
     def __init__(self,detector,detect_interval=.5,max_gap=1.5):
         self.detector=detector;self.interval=detect_interval;self.max_gap=max_gap;self.reset()
     def reset(self):
-        self.tracks=[];self.previous=None;self.last=None;self.last_detect=-math.inf;self.next_id=1
+        self.tracks=[];self.lost=[];self.previous=None;self.last=None;self.last_detect=-math.inf;self.next_id=1
         self.session=__import__('secrets').token_hex(4)
     def update(self,image,timestamp):
         if not math.isfinite(timestamp):raise ValueError('Invalid frame timestamp')
@@ -44,37 +49,50 @@ class VehicleTracker:
         gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY);h,w=gray.shape
         if self.previous is not None and self.previous.shape!=gray.shape:self.reset()
         if self.previous is not None:
-            alive=[]
+            alive=[];lost=[]
             for t in self.tracks:
                 x,y,bw,bh=t['box'];mask=np.zeros_like(gray);mask[int(y*h):int((y+bh)*h),int(x*w):int((x+bw)*w)]=255
-                points=cv2.goodFeaturesToTrack(self.previous,maxCorners=15,qualityLevel=.03,minDistance=3,mask=mask)
-                if points is None or len(points)<3:continue
+                points=cv2.goodFeaturesToTrack(self.previous,maxCorners=20,qualityLevel=.01,minDistance=2,mask=mask)
+                if points is None or len(points)<3:
+                    lost.append(t);continue
                 moved,status,_=cv2.calcOpticalFlowPyrLK(self.previous,gray,points,None,winSize=(15,15),maxLevel=2)
                 back,good,_=cv2.calcOpticalFlowPyrLK(gray,self.previous,moved,None,winSize=(15,15),maxLevel=2)
                 valid=(status.reshape(-1)>0)&(good.reshape(-1)>0)&(np.linalg.norm((back-points).reshape(-1,2),axis=1)<1.5)
-                if valid.sum()<3:continue
+                if valid.sum()<3:
+                    lost.append(t);continue
                 dx,dy=np.median((moved-points).reshape(-1,2)[valid],axis=0)/[w,h]
                 nx,ny=float(np.clip(x+dx,0,1-bw)),float(np.clip(y+dy,0,1-bh))
                 t={**t,'box':[nx,ny,bw,bh],'tracking_method':'optical_flow'}
                 if timestamp-t['detected_at']<=self.max_gap:alive.append(t)
+            self.lost=[t for t in self.lost+lost if timestamp-t['detected_at']<=self.max_gap]
             self.tracks=alive
         if timestamp-self.last_detect>=self.interval:
-            detections=self.detector.detect(image);pairs=[]
-            for i,t in enumerate(self.tracks):
-                for j,d in enumerate(detections):
-                    overlap=iou(t['box'],d['box'])
-                    if overlap>.15:pairs.append((overlap,i,j))
-            assigned={};used=set()
-            for _,i,j in sorted(pairs,reverse=True):
-                if i not in used and j not in assigned:assigned[j]=self.tracks[i]['track_id'];used.add(i)
+            detections=self.detector.detect(image)
+            threshold=getattr(self.detector,'new_track_threshold',.35)
+            # High-score detections associate first. Low-score detections can
+            # recover an existing ID, but cannot create a new object on their own.
+            pool=self.tracks+self.lost;assigned={};used=set()
+            for high in (True,False):
+                pairs=[]
+                for i,t in enumerate(pool):
+                    if i in used:continue
+                    for j,d in enumerate(detections):
+                        if j in assigned or (d['score']>=threshold)!=high:continue
+                        overlap=iou(t['box'],d['box'])
+                        if overlap>.15:pairs.append((overlap,i,j))
+                for _,i,j in sorted(pairs,reverse=True):
+                    if i not in used and j not in assigned:
+                        assigned[j]=pool[i]['track_id'];used.add(i)
             fresh=[]
             for j,d in enumerate(detections):
                 ident=assigned.get(j)
-                if ident is None:ident=self.session+'-'+str(self.next_id);self.next_id+=1
+                if ident is None:
+                    if d['score']<threshold:continue
+                    ident=self.session+'-'+str(self.next_id);self.next_id+=1
                 fresh.append({**d,'track_id':ident,'detected_at':timestamp,'tracking_method':'detector'})
-            # A missed detection does not erase a track with measured,
-            # forward/backward-consistent flow, bounded by max_gap.
             fresh.extend(t for i,t in enumerate(self.tracks) if i not in used and timestamp-t['detected_at']<=self.max_gap)
+            # Lost, unmeasured positions are kept for matching only, never drawn.
+            self.lost=[t for i,t in enumerate(pool) if i>=len(self.tracks) and i not in used and timestamp-t['detected_at']<=self.max_gap]
             self.tracks=fresh[:50];self.last_detect=timestamp
         self.previous=gray;self.last=timestamp
         return [{k:v for k,v in t.items() if k!='detected_at'} for t in self.tracks]

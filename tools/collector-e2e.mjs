@@ -17,9 +17,10 @@ const DB={prepare(query){return{bind(...args){return{
 const objects=new Map();
 const BUCKET={async put(key,bytes,opts={}){objects.set(key,{bytes:Buffer.from(bytes),customMetadata:opts.customMetadata});},async delete(key){objects.delete(key);},async head(key){const o=objects.get(key);return o?{size:o.bytes.length,customMetadata:o.customMetadata}:null;},async get(key,options){const o=objects.get(key);return o?{customMetadata:o.customMetadata,body:options?.range?o.bytes.subarray(options.range.offset,options.range.offset+options.range.length):o.bytes}:null;}};
 const token=randomBytes(32).toString('hex'),env={DB,BUCKET,INGEST_TOKEN:token},worker=createWorker();
+let largestPostedTrackingBatch=0;
 const server=createServer(async(req,res)=>{
  try{const parts=[];for await(const b of req)parts.push(b);
- if(req.url.endsWith('/tracking')&&req.method==='POST')await new Promise(r=>setTimeout(r,600));
+ if(req.url.endsWith('/tracking')&&req.method==='POST'){largestPostedTrackingBatch=Math.max(largestPostedTrackingBatch,JSON.parse(Buffer.concat(parts)).frames?.length||1);await new Promise(r=>setTimeout(r,600));}
  const response=await worker.fetch(new Request('https://loopback.test'+req.url,{method:req.method,headers:req.headers,body:['GET','HEAD'].includes(req.method)?undefined:Buffer.concat(parts)}),env);
  res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
  }catch{res.writeHead(500);res.end('Test harness failed');}
@@ -46,6 +47,7 @@ try{
  assert.ok(event?.evidence_id,'Synthetic event clip was not persisted: '+JSON.stringify({stats,preview:!!preview,cameras:await(await call('/api/cameras')).json()})+' '+log);
  assert.ok(tracking?.observation?.detections[0]?.track_id,'Tracking transport missing');
  assert.equal(tracking.observation.frame_id,createHash('sha256').update(Buffer.from(tracking.jpeg,'base64')).digest('hex'));
+ assert.ok(largestPostedTrackingBatch>1,'Collector must batch actual frames');
  assert.ok(tracking.frames.length>1,'Slow transport must deliver multiple actual frames per packet');
  for(const f of tracking.frames)assert.equal(f.observation.frame_id,createHash('sha256').update(Buffer.from(f.jpeg,'base64')).digest('hex'));
  assert.ok(preview?.observation?.frame_id);assert.equal(stats.collectors_online,1);

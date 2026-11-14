@@ -19,5 +19,6 @@
       "stream_url": "https://video2.iowadot.gov:8888/councilbluffs/cbtv51lb/playlist.m3u8"
     }
   ],
-  "incident_interval_seconds": 5
+  "incident_interval_seconds": 5,
+  "vehicle_model_version": "opencv-nanodet-2022nov+LK-v2"
 }

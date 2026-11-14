@@ -147,7 +147,7 @@ def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "segment", "-segment_time", "2",
             "-segment_list", str(directory / "segments.csv"), "-segment_list_size", "30", "-segment_wrap", "30",
             "-segment_format", "mpegts", str(directory / "segment-%03d.ts"),
-            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale='min(640,iw)':-2", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
+            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale='min(640,iw)':-2", "-q:v", "3", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
 
 
 async def evidence(event, directory, api, ffmpeg, pre, post, outbox=None):
@@ -203,6 +203,12 @@ async def evidence(event, directory, api, ffmpeg, pre, post, outbox=None):
                 await asyncio.to_thread(outbox.enqueue,event['id'],output)
             else:
                 await asyncio.to_thread(api.post, f'/api/events/{event["id"]}/evidence', data=output.read_bytes(), headers={"Content-Type": "video/mp4"})
+
+
+def analyze_frame(tracker,detector,jpeg,frame_time,do_incident):
+    image=cv2.imdecode(np.frombuffer(jpeg,np.uint8),cv2.IMREAD_COLOR) if tracker else None
+    tracks=tracker.update(image,frame_time) if tracker else []
+    return tracks,detector.infer(jpeg) if do_incident else []
 
 
 async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget, state, publisher, outbox):
@@ -262,10 +268,9 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 if cpu_budget["seconds"] >= settings.get("daily_inference_cpu_seconds", 240):
                     raise RuntimeError("Collector stopped: configured inference CPU budget exhausted")
                 start = time.process_time()
-                image=cv2.imdecode(np.frombuffer(jpeg,np.uint8),cv2.IMREAD_COLOR) if tracker else None
-                tracks=tracker.update(image,frame_mtime) if tracker else []
                 do_incident=frame_mtime-last_incident>=settings.get('incident_interval_seconds',0)
-                detections=detector.infer(jpeg) if do_incident else []
+                # OpenCV must not block delivery/leases/heartbeats on the event loop.
+                tracks,detections=await asyncio.to_thread(analyze_frame,tracker,detector,jpeg,frame_mtime,do_incident)
                 if do_incident:last_incident=frame_mtime
                 cpu_budget["seconds"] += time.process_time() - start
                 ledger = Path(settings["buffer_root"]) / "cpu-budget.json"

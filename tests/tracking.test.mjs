@@ -14,3 +14,12 @@ test('tracking playout bounds memory, skips late frames and recovers after a str
  q.reset();q.add([frame('first',1000)]);q.take(0);q.add([frame('after-gap',10000)]);
  assert.equal(q.take(100).jpeg,'after-gap');assert.equal(q.take(101),null);
 });
+test('live buffer starts near the newest frame and absorbs packet jitter at source cadence',()=>{
+ const q=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:750});
+ q.add(Array.from({length:12},(_,i)=>frame(String(i),10000+i*250)));
+ assert.equal(q.take(0),null);assert.equal(q.take(250).jpeg,'8');
+ assert.equal(q.take(500).jpeg,'9');
+ q.add([frame('10',12500),frame('11',12750),frame('12',13000)]);
+ assert.equal(q.take(750).jpeg,'10');assert.equal(q.take(1000).jpeg,'11');assert.equal(q.take(1250).jpeg,'12');
+ assert.equal(q.take(1300),null,'no positions or frames are extrapolated during a gap');
+});

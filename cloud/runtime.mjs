@@ -104,10 +104,23 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     const latest=frames.at(-1).observation;
     if(Date.now()-Date.parse(latest.captured_at)>5000)fail('Tracking frame too old');
     if(Date.parse(latest.captured_at)-Date.parse(frames[0].observation.captured_at)>4000)fail('Tracking batch spans too much time');
-    const count=frames.length;
+    // Keep a bounded recent window so browser polling cannot miss an entire
+    // packet. Retained frames do not spend the daily display quota again.
+    const old=await env.BUCKET.get(key);
+    const stored=old?JSON.parse(await new Response(old.body).text()):null;
+    const previousFrames=stored?(stored.frames||[{observation:stored.observation,jpeg:stored.jpeg}]):[];
+    const known=new Set(previousFrames.map(f=>f.observation.frame_id));
+    const count=frames.filter(f=>!known.has(f.observation.frame_id)).length;
+    if(!count)return {stored:true,frame_id:latest.frame_id,frames_stored:0};
+    if(previousFrames.length&&Date.parse(previousFrames.at(-1).observation.captured_at)>Date.parse(latest.captured_at))fail('Out-of-order tracking packet',409);
+    const window=new Map(previousFrames.map(f=>[f.observation.frame_id,f]));
+    for(const f of frames)window.set(f.observation.frame_id,f);
+    const cutoff=Date.parse(latest.captured_at)-3000;
+    let retained=[...window.values()].filter(f=>Date.parse(f.observation.captured_at)>=cutoff).sort((a,b)=>Date.parse(a.observation.captured_at)-Date.parse(b.observation.captured_at)).slice(-12);
+    while(retained.length>1&&new TextEncoder().encode(JSON.stringify(retained)).length>800000)retained.shift();
     const reserved=await stmt(env,`INSERT INTO rw_probes(source_id,checked_at,data) VALUES(?,?,json_object('count',?)) ON CONFLICT(source_id) DO UPDATE SET checked_at=excluded.checked_at,data=json_set(rw_probes.data,'$.count',json_extract(rw_probes.data,'$.count')+?) WHERE json_extract(rw_probes.data,'$.count')+?<=24000`,'tracking-quota:'+now().slice(0,10),now(),count,count,count).run();
     if(!reserved.meta.changes)fail('Daily tracking display quota reached',429);
-    await env.BUCKET.put(key,new TextEncoder().encode(JSON.stringify({frames,received_at:now()})),{httpMetadata:{contentType:'application/json'},customMetadata:{captured_at:latest.captured_at}});
+    await env.BUCKET.put(key,new TextEncoder().encode(JSON.stringify({frames:retained,received_at:now()})),{httpMetadata:{contentType:'application/json'},customMetadata:{captured_at:latest.captured_at}});
     return {stored:true,frame_id:latest.frame_id,frames_stored:count};
   }
   async function pushSettings() {

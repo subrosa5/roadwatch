@@ -27,4 +27,23 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(t.update(f,0)),1);self.assertEqual(t.update(f,.2),[])
     def test_hash_is_required_before_loading_weights(self):
         with self.assertRaises(ValueError):VehicleDetector({'path':__file__,'sha256':'0'*64})
+    def test_low_score_recovers_existing_id_but_never_seeds_a_background_track(self):
+        class Detector:
+            new_track_threshold=.25
+            score=.4
+            def detect(self,image):return [{'label':'vehicle','score':self.score,'box':[.2,.2,.2,.2]}]
+        d=Detector();t=VehicleTracker(d);f=np.zeros((200,200,3),np.uint8)
+        first=t.update(f,0)[0]
+        self.assertEqual(t.update(f,.2),[],'textureless lost positions must not be drawn')
+        d.score=.19
+        recovered=t.update(f,.6)[0]
+        self.assertEqual(first['track_id'],recovered['track_id'])
+        self.assertEqual(recovered['tracking_method'],'detector')
+        t.reset();self.assertEqual(t.update(f,1),[],'weak unmatched detections must not create IDs')
+    def test_vehicle_class_duplicates_are_suppressed(self):
+        d=VehicleDetector.__new__(VehicleDetector)
+        class Net:
+            def infer(self,image):return np.array([[50,50,100,100,.5,2],[51,51,101,101,.4,7],[200,200,230,230,.3,2]])
+        d.net=Net();out=d.detect(np.zeros((416,416,3),np.uint8))
+        self.assertEqual(len(out),2);self.assertEqual(out[0]['score'],.5)
 if __name__=='__main__':unittest.main(verbosity=2)

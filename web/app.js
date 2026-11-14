@@ -4,7 +4,7 @@ import { LivePlayer, publicStream } from "./live.js";
 const $ = (id) => document.getElementById(id);
 let hosted = false;
 const playbackStates = new Map();
-const trackingBuffer=new TrackingBuffer(),viewerId=crypto.randomUUID();
+const trackingBuffer=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:750}),viewerId=crypto.randomUUID();
 let trackingStale=false;
 function renderPlayback(id, url) {
   if (selected?.id !== id) return;
@@ -310,7 +310,7 @@ async function refreshTracking(){
   }else{
    trackingBuffer.add(frames);
    $('scene-tag').textContent='ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ';
-   nextTrackingPoll=Date.now()+600;
+   nextTrackingPoll=Date.now()+200;
   }
   $('model-name').textContent=data.observation.model;
   $('analysis-note').textContent='Реальный NanoDet находит транспорт; optical flow ведёт его между детекциями. ID относится к текущему проходу камеры, после потери объекта может измениться. Рамки и изображение получены вместе из облака.';

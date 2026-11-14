@@ -4,6 +4,7 @@ COPY collector/botkeep/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt && useradd -u 10001 -m worker && mkdir /app/data && chown worker /app/data
 COPY collector/collector.py collector/publisher.py collector/outbox.py collector/vehicles.py ./
 COPY collector/botkeep/main.py collector/botkeep/config.json collector/botkeep/model.lock.json ./
+RUN python -c "import json; p='config.json'; c=json.load(open(p)); c['fps']=4; open(p,'w').write(json.dumps(c))"
 COPY collector/vendor ./vendor
 COPY collector/botkeep/vehicle.lock.json ./
 USER worker

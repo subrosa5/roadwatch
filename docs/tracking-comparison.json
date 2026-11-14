@@ -1,0 +1,54 @@
+{
+  "scope": "Short recorded public Iowa sample; no production writes and no labelled accuracy benchmark",
+  "camera_id": "iowa-cbtv51",
+  "source_time": "2026-11-14 08:27:53\u201308:28:18 CT",
+  "sample_sha256": "51f11afaa3d11f4d2732eb8e488cf81e600e898de729a64322ad4e2ff2a87353",
+  "model_sha256": "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186",
+  "fps": 4,
+  "detector_interval_seconds": 0.65,
+  "baseline_commit": "c7351b8",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64"
+  },
+  "profiles": [
+    {
+      "profile": "previous",
+      "frames": 100,
+      "frames_with_tracks": 20,
+      "track_observations": 27,
+      "detector_observations": 16,
+      "optical_flow_observations": 11,
+      "distinct_ids": 16,
+      "jpeg_bytes_median": 5768.0,
+      "cpu_ms_per_frame": 12.23939583333334,
+      "quality_validated": false
+    },
+    {
+      "profile": "jpeg_only",
+      "frames": 100,
+      "frames_with_tracks": 23,
+      "track_observations": 29,
+      "detector_observations": 22,
+      "optical_flow_observations": 7,
+      "distinct_ids": 22,
+      "jpeg_bytes_median": 25669.0,
+      "cpu_ms_per_frame": 12.232968750000019,
+      "quality_validated": false
+    },
+    {
+      "profile": "tuned",
+      "frames": 100,
+      "frames_with_tracks": 58,
+      "track_observations": 115,
+      "detector_observations": 47,
+      "optical_flow_observations": 68,
+      "distinct_ids": 34,
+      "jpeg_bytes_median": 25669.0,
+      "cpu_ms_per_frame": 13.151239583333313,
+      "quality_validated": false
+    }
+  ],
+  "false_positive_rate_measured": false,
+  "recall_measured": false
+}

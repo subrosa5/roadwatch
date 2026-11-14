@@ -417,7 +417,9 @@ test('tracking keeps real IDs and atomic JPEG, rejects mismatches, and never cre
  assert.equal((await (await s.call('/api/events')).json()).length,0);
  assert.equal((await (await s.call('/api/stats')).json()).daily_frames,0);
  s.sql.prepare("UPDATE rw_probes SET data=json_object('count',24000) WHERE source_id LIKE 'tracking-quota:%'").run();
- assert.equal((await s.post(path+'/tracking',payload)).status,429);
+ const nextBytes=Buffer.from([255,216,255,9,8,7]);
+ const nextHash=Buffer.from(await crypto.subtle.digest('SHA-256',nextBytes)).toString('hex');
+ assert.equal((await s.post(path+'/tracking',{observation:{...o,frame_id:nextHash,captured_at:new Date().toISOString()},jpeg:nextBytes.toString('base64')})).status,429);
 });
 
 test('tracking batches preserve order, charge each frame and remain fresh at four seconds',async()=>{
@@ -434,7 +436,8 @@ test('tracking batches preserve order, charge each frame and remain fresh at fou
  assert.equal(d.frame_age_ms>=4000,true);assert.equal(d.jpeg,frames[2].jpeg);assert.deepEqual(d.frames.map(f=>f.jpeg),frames.map(f=>f.jpeg));
  assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,3);
  s.sql.prepare("UPDATE rw_probes SET data=json_object('count',23998) WHERE source_id LIKE 'tracking-quota:%'").run();
- assert.equal((await s.post(path+'/tracking',{frames})).status,429);
+ const fresh=await Promise.all(frames.map(async(f,i)=>{const b=Buffer.from([255,216,255,i+10]);return {...f,observation:{...f.observation,frame_id:Buffer.from(await crypto.subtle.digest('SHA-256',b)).toString('hex'),captured_at:new Date(Date.now()-1000+i*200).toISOString()},jpeg:b.toString('base64')};}));
+ assert.equal((await s.post(path+'/tracking',{frames:fresh})).status,429);
  assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,23998);
 });
 
@@ -446,4 +449,17 @@ test('each viewer releases only its own lease and demand includes both modes',as
  await s.call(path+'/view',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({viewer_id:'B'})},true);
  d=await(await s.call(path+'/demand')).json();assert.equal(d.active,true);assert.deepEqual(d.kinds,['tracking']);
  await s.call(path+'/view',{method:'DELETE'},true);assert.equal((await(await s.call(path+'/demand')).json()).active,true);
+});
+
+test('tracking relay retains recent packets without charging retained or retried frames twice',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking'},true);
+ async function packet(i){const b=Buffer.from([255,216,255,i]);return {observation:{...obs(Buffer.from(await crypto.subtle.digest('SHA-256',b)).toString('hex'),Date.now()-2000+i*250),camera_id:'iowa-cbtv51',demo:false,detections:[]},jpeg:b.toString('base64')};}
+ const a=await packet(0),b=await packet(1),c=await packet(2);
+ await s.post(path+'/tracking',{frames:[a,b]});
+ await s.post(path+'/tracking',{frames:[b,c]});
+ let out=await(await s.call(path+'/tracking')).json();assert.deepEqual(out.frames.map(f=>f.jpeg),[a,b,c].map(f=>f.jpeg));
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,3);
+ assert.equal((await(await s.post(path+'/tracking',{frames:[b,c]})).json()).frames_stored,0);
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,3);
 });
