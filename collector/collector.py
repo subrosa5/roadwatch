@@ -147,7 +147,7 @@ def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "segment", "-segment_time", "2",
             "-segment_list", str(directory / "segments.csv"), "-segment_list_size", "30", "-segment_wrap", "30",
             "-segment_format", "mpegts", str(directory / "segment-%03d.ts"),
-            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale=640:-2", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
+            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale='min(640,iw)':-2", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
 
 
 async def evidence(event, directory, api, ffmpeg, pre, post, outbox=None):

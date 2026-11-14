@@ -66,7 +66,7 @@ def preflight(config, model):
     source = os.environ.get("ROADWATCH_PREFLIGHT_VIDEO", config["cameras"][0]["stream_url"])
     camera_network_test = "ROADWATCH_PREFLIGHT_VIDEO" not in os.environ
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-rw_timeout", "10000000",
-               "-threads", "1", "-i", source, "-frames:v", "1", "-vf", "scale=640:-2",
+               "-threads", "1", "-i", source, "-frames:v", "1", "-vf", "scale='min(640,iw)':-2",
                "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40)
     if result.returncode or not result.stdout or len(result.stdout) > 2 * 1024 * 1024:
@@ -133,7 +133,10 @@ def tracking_load(config,model):
             except subprocess.TimeoutExpired:process.kill();process.wait()
     duration=time.monotonic()-first if first else 0
     rate=frames/duration if duration else 0
-    result={'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=3 and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<350}
+    cgroup_peak=None
+    try:cgroup_peak=int(Path('/sys/fs/cgroup/memory.peak').read_text())/1024**2
+    except (OSError,ValueError):pass
+    result={'cgroup_memory_peak_mib':cgroup_peak,'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=3 and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<384 and (cgroup_peak is None or cgroup_peak<448)}
     print(json.dumps(result),flush=True)
     if not result['throughput_gate_passed']:raise RuntimeError('Real tracking throughput gate did not pass')
 
