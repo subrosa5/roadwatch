@@ -68,6 +68,7 @@ if(input.operation==='tracking-probe') {
   const tracking=tr.ok?await tr.json():{http_status:tr.status,error:(await tr.text()).slice(0,120)};
   if(tracking.jpeg)tracking.jpeg_bytes=Buffer.from(tracking.jpeg,'base64').length;
   delete tracking.jpeg;
+  if(tracking.frames)tracking.frames=tracking.frames.map(({jpeg,...frame})=>({...frame,jpeg_bytes:jpeg?Buffer.from(jpeg,'base64').length:0}));
   let frame=null;
   const r=await fetch(new URL('/api/cameras/iowa-cbtv51/frame',origin),{headers,redirect:'manual',signal:AbortSignal.timeout(15000)});
   if(r.ok){const bytes=Buffer.from(await r.arrayBuffer());frame={bytes:bytes.length,id:r.headers.get('X-Frame-ID'),jpeg:bytes[0]===255&&bytes[1]===216};}

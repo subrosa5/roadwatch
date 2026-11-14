@@ -57,3 +57,6 @@ Sites source `4ad05eed8d6ae3a432f9f3a4f75d8cd3e361f015`, deployment `appgdep_6af
 
 
 Повторный production browser probe 14:07 UTC действительно отрисовал две vehicle рамки с ID c3637e8b-58 и -59 (скриншот docs/screenshots/hostrix-tracking.png). Одновременно выявлен отдельный health bug: heartbeat раз в 60 с, но online требовал last_frame_at моложе 20 с, поэтому рабочий collector периодически отображался offline. Окно телеметрии согласовано с cadence: 90 с, при этом свежесть tracking остаётся 5 с. Тесты проверяют online на 45 с и offline на 91 с; кадры не выдаются за свежие из-за этого изменения.
+
+
+Финальная health-публикация: source `4f1e5ac694d5241da22d386790e5412cdee3d3d1`, deployment `appgdep_6af86bec25448191a9e9991a7f52d38c` — succeeded, owner-private. Проверка 14:11 UTC: monitoring=true, collectors_online=1, 8422 frames_analyzed, uptime 2259 с, last_error=null. На время проверки viewer отсутствовал, поэтому tracking закономерно stale; это не остановка фонового анализа. Новая пакетная версия коллектора ещё требует обычного Upload/Unzip владельцем.
