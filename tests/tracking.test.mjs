@@ -23,3 +23,14 @@ test('live buffer starts near the newest frame and absorbs packet jitter at sour
  assert.equal(q.take(750).jpeg,'10');assert.equal(q.take(1000).jpeg,'11');assert.equal(q.take(1250).jpeg,'12');
  assert.equal(q.take(1300),null,'no positions or frames are extrapolated during a gap');
 });
+test('the live eight-frame window bridges two-second packet delivery without dropping source cadence',()=>{
+ const q=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:1750});
+ q.add(Array.from({length:8},(_,i)=>frame(String(i),10000+i*250)));
+ const rendered=[];
+ for(let wall=0;wall<=4000;wall+=50){
+  if(wall===2000)q.add(Array.from({length:8},(_,i)=>frame(String(i+8),12000+i*250)));
+  const f=q.take(wall);if(f)rendered.push({id:f.jpeg,wall});
+ }
+ assert.equal(rendered.length,16);
+ assert.ok(rendered.slice(1).every((r,i)=>r.wall-rendered[i].wall===250));
+});

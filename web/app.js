@@ -4,7 +4,7 @@ import { LivePlayer, publicStream } from "./live.js";
 const $ = (id) => document.getElementById(id);
 let hosted = false;
 const playbackStates = new Map();
-const trackingBuffer=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:750}),viewerId=crypto.randomUUID();
+const trackingBuffer=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:1750}),viewerId=crypto.randomUUID();
 let trackingStale=false;
 function renderPlayback(id, url) {
   if (selected?.id !== id) return;
