@@ -197,9 +197,9 @@ if(input.operation==='package'){
         await page.waitForTimeout(500);
       }
       console.log(JSON.stringify({fresh_track_samples:trackingSamples.filter(s=>!s.stale&&s.detections.length).length,ui_tracks_seen:!!visibleTracking,last_label:await page.locator('#analysis-tags').textContent()}));
-      if(input.sample_seconds)await page.waitForTimeout(Math.max(10,Math.min(90,Number(input.sample_seconds)))*1000);
       await page.locator('#viewport').screenshot({path:'docs/screenshots/live-tracking-detail.png'});
       await page.screenshot({path:'docs/screenshots/hostrix-tracking.png',fullPage:true});
+      if(input.sample_seconds)await page.waitForTimeout(Math.max(10,Math.min(90,Number(input.sample_seconds)))*1000);
       if(await page.locator('#overlay').isHidden())throw Error('Tracking overlay hidden');
       if(!(await page.locator('#camera-live').isHidden()))throw Error('Tracking mixed with unmatched HLS');
       const ids=new Set(trackingSamples.map(s=>s.frame_id));

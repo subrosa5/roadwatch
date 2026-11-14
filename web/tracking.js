@@ -14,12 +14,16 @@ export class TrackingBuffer {
     this.queue=this.queue.filter(f=>Date.parse(f.observation.captured_at)>=cutoff);
   }
   add(frames){
+    const wasEmpty=this.queue.length===0;
     for(const frame of frames){
       const at=Date.parse(frame?.observation?.captured_at);
       if(!Number.isFinite(at)||at<=this.last||this.queue.some(f=>f.observation.frame_id===frame.observation.frame_id))continue;
       this.queue.push(frame);
     }
     this.queue.sort((a,b)=>Date.parse(a.observation.captured_at)-Date.parse(b.observation.captured_at));
+    // An underrun pauses the source timeline. Resume the next actual packet
+    // rather than treating all its frames as overdue and skipping to its tail.
+    if(wasEmpty&&this.queue.length)this.anchor=null;
     if(this.queue.length>24){this.queue=this.queue.slice(-24);this.anchor=null;}
     // Only trim when starting/recovering. A new packet must not evict the
     // unplayed tail of the previous one from an established source timeline.

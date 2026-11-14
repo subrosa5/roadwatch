@@ -42,3 +42,11 @@ test('a stale still frame establishes a watermark and later packets cannot rewin
  assert.equal(q.advanceTo(frame('late-response',19000)),false);
  q.add([frame('repeated',20250)]);assert.equal(q.take(250),null);
 });
+test('delivery pause resumes actual packet frames instead of collapsing to the last frame',()=>{
+ const q=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:1750});
+ q.add([frame('first',10000)]);assert.equal(q.take(0),null);assert.equal(q.take(250).jpeg,'first');
+ assert.equal(q.take(2500),null);
+ q.add([frame('second',10500),frame('third',11000),frame('fourth',11500)]);
+ assert.equal(q.take(2500),null);assert.equal(q.take(2750).jpeg,'second');
+ assert.equal(q.take(3250).jpeg,'third');assert.equal(q.take(3750).jpeg,'fourth');
+});
