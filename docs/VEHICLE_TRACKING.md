@@ -33,3 +33,11 @@ Iowa HLS → FFmpeg с pacing и кольцом записи → кадры 5 fp
 Для фактического live требуется запуск на аккаунте облачного хоста: [единая инструкция](OWNER_FINAL_STEPS.md). Пока такого экземпляра нет, наличие опубликованного интерфейса не означает работающий мониторинг. Распознавание ДТП остаётся отдельной невалидированной исследовательской задачей.
 
 Первый cloud load test: 4.91 fps, 101 кадр за 20.58 секунды, 46 track observations. Консервативная сумма high-water RSS 356.89 МиБ превысила предварительный порог 350 МиБ; проверка корректно завершилась failure. Следующая версия сохраняет исходное разрешение камеры вместо upscale до 640, измеряет cgroup memory.peak и требует <384 МиБ по сумме RSS и <448 МиБ по общей памяти контейнера при лимите 512 МиБ. Это сохраняет измеримый запас и учитывает память FFmpeg/кеша/служебных процессов.
+
+## Итоговая облачная проверка
+
+[Повторный Linux load test](https://github.com/subrosa5/roadwatch/actions/runs/43588101584), commit `902b911`: success. Docker ограничен 0.5 CPU / 512 МиБ, реальный Iowa HLS, настоящие NanoDet + optical-flow + fire/smoke. 101 кадр за 20.58 секунды, **4.907 fps**, 11 track observations; inference CPU 2.63 секунды, консервативная сумма high-water RSS **354.45 МиБ**. Контейнерный cgroup counter также прочитан; для оценки запаса используется консервативная сумма RSS. Двадцать секунд не являются проверкой суток работы или accuracy, приватный API в load test не вызывался.
+
+[CI полного контура](https://github.com/subrosa5/roadwatch/actions/runs/43587718355): success, 37 Node + 16 Python tests, синтетический transport E2E проверил tracking ID/JPEG/hash и запись incident MP4/Range. После CI изменены только отсутствие upscale и измерение памяти; тест FFmpeg/клипов повторён локально (4 passed), затем новый load test прошёл в облаке.
+
+Sites source commit `1be8e115a2320d3fc607fd84dc0063090d883011`, deployment `appgdep_6af8402f4ea48191a781514bab2e9cc9`: succeeded, owner-private. ZIP окончательной версии: 27347 байт, SHA-256 `131a1fcb31acc62e2030478fcea2efcf6ae475ceab1c2c83d4ac3415e060f3be`. Runtime экземпляр ещё не создан: collectors_online=0, реальных событий нет.
