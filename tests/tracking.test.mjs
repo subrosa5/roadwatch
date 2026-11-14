@@ -34,3 +34,11 @@ test('the live eight-frame window bridges two-second packet delivery without dro
  assert.equal(rendered.length,16);
  assert.ok(rendered.slice(1).every((r,i)=>r.wall-rendered[i].wall===250));
 });
+test('a stale still frame establishes a watermark and later packets cannot rewind it',()=>{
+ const q=new TrackingBuffer();
+ assert.equal(q.advanceTo(frame('last-known',20000)),true);
+ q.add([frame('older',19500),frame('last-known',20000),frame('new',20250)]);
+ assert.equal(q.take(0).jpeg,'new');
+ assert.equal(q.advanceTo(frame('late-response',19000)),false);
+ q.add([frame('repeated',20250)]);assert.equal(q.take(250),null);
+});

@@ -225,8 +225,11 @@ try {
   const initialTrackingSrc=await page.locator('#camera-frame').getAttribute('src');
   await page.waitForFunction(src=>document.getElementById('camera-frame').src!==src,initialTrackingSrc);
   await page.waitForTimeout(800);assert.ok(trackingRequests>=2);
+  const beforeDelay=await page.locator('#camera-frame').getAttribute('data-captured-at');
   staleTracking=true;
-  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('ОЖИДАЕМ НОВЫЕ'));
+  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('ЗАДЕРЖИВАЕТСЯ'));
+  const afterDelay=await page.locator('#camera-frame').getAttribute('data-captured-at');
+  assert.ok(Date.parse(afterDelay)>=Date.parse(beforeDelay),'late responses must never rewind the displayed image');
   assert.equal(await page.locator('#video-unavailable').isHidden(),true,'a delayed matching image must stay visible');
   staleTracking=false;
   await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('С ЗАДЕРЖКОЙ'));

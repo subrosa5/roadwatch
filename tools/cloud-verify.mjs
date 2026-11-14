@@ -177,6 +177,14 @@ if(input.operation==='package'){
       console.log(JSON.stringify({browser_visibility:await page.evaluate(()=>document.visibilityState),content_security_policy:documentResponse.headers()['content-security-policy']||null}));
       await page.waitForFunction(()=>document.querySelectorAll('#camera-picker .camera-choice').length===2);
       await page.locator('[data-camera="iowa-cbtv51"]').click();
+      await page.evaluate(()=>{
+       window.__trackingPaints=[];
+       const el=document.getElementById('camera-frame');
+       new MutationObserver(()=>{
+        const at=el.dataset.capturedAt,id=el.dataset.frameId;
+        if(id&&id!==window.__trackingPaints.at(-1)?.id)window.__trackingPaints.push({id,at,wall:performance.now(),age:Date.now()-Date.parse(at)});
+       }).observe(el,{attributes:true,attributeFilter:['data-captured-at']});
+      });
       await page.locator('#mode-tracking').click();
       await page.waitForFunction(()=>{const im=document.getElementById('camera-frame');return im.complete&&im.naturalWidth>0&&document.getElementById('video-unavailable').hidden;},null,{timeout:35000});
       const first=await page.locator('#camera-frame').getAttribute('src');
@@ -189,6 +197,7 @@ if(input.operation==='package'){
         await page.waitForTimeout(500);
       }
       console.log(JSON.stringify({fresh_track_samples:trackingSamples.filter(s=>!s.stale&&s.detections.length).length,ui_tracks_seen:!!visibleTracking,last_label:await page.locator('#analysis-tags').textContent()}));
+      if(input.sample_seconds)await page.waitForTimeout(Math.max(10,Math.min(90,Number(input.sample_seconds)))*1000);
       await page.locator('#viewport').screenshot({path:'docs/screenshots/live-tracking-detail.png'});
       await page.screenshot({path:'docs/screenshots/hostrix-tracking.png',fullPage:true});
       if(await page.locator('#overlay').isHidden())throw Error('Tracking overlay hidden');
@@ -198,7 +207,13 @@ if(input.operation==='package'){
       const stats=await(await call('/api/stats')).json();
       if(errors.length)throw Error('UI errors: '+errors.join(', '));
       if(!stats.monitoring)throw Error('Collector no longer online');
-      if(ids.size<2||trackingSamples.at(-1)?.stale)throw Error('Tracking frames not advancing');
+      const paints=await page.evaluate(()=>window.__trackingPaints.filter(f=>f.age<15000));
+      const reversed=paints.slice(1).filter((f,i)=>Date.parse(f.at)<Date.parse(paints[i].at)).length;
+      const span=paints.length>1?(paints.at(-1).wall-paints[0].wall)/1000:0;
+      const gaps=paints.slice(1).map((f,i)=>(f.wall-paints[i].wall)/1000);
+      if(ids.size<2||paints.length<2)throw Error('Tracking images not advancing');
+      if(reversed)throw Error('Tracking images moved backwards in capture time');
+      console.log(JSON.stringify({rendered_frames:paints.length,rendered_fps:span?(paints.length-1)/span:0,max_render_pause_seconds:Math.max(0,...gaps),reversed_frames:reversed,max_render_age_seconds:Math.max(0,...paints.map(f=>f.age/1000)),stale_api_reads:trackingSamples.filter(s=>s.stale).length,latest_api_stale:trackingSamples.at(-1)?.stale}));
       console.log(JSON.stringify({production_tracking_verified:true,synthetic_data:false,collectors_online:stats.collectors_online,real_frame_ids:ids.size,samples:trackingSamples.length,max_visible_tracks:Math.max(0,...trackingSamples.map(s=>s.detections.length)),unique_track_ids:trackIds.size,model:trackingSamples.at(-1)?.model,latest_captured_at:trackingSamples.at(-1)?.captured_at,overlay_visible:true,matching_frame_mode:true,visible_tracking:visibleTracking,uncaught_errors:errors.length}));
     } else if (input.operation === "live") {
       await post("/api/ops/init", {});

@@ -2,6 +2,12 @@
 export class TrackingBuffer {
   constructor({playoutDelayMs=0,maxBacklogMs=Infinity}={}){this.delay=playoutDelayMs;this.maxBacklog=maxBacklogMs;this.reset();}
   reset(){this.queue=[];this.last=-Infinity;this.anchor=null;}
+  advanceTo(frame){
+    const at=Date.parse(frame?.observation?.captured_at);
+    if(!Number.isFinite(at)||at<=this.last)return false;
+    this.last=at;this.queue=this.queue.filter(f=>Date.parse(f.observation.captured_at)>at);this.anchor=null;
+    return true;
+  }
   trimBacklog(){
     if(!this.queue.length)return;
     const cutoff=Date.parse(this.queue.at(-1).observation.captured_at)-this.maxBacklog;

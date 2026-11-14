@@ -269,6 +269,8 @@ function showFrame(meta,blob) {
  $('camera-frame').onload=()=>{
   if(selected?.id!==id||frameBlob!==url)return;
   displayObservation=meta;displayFrameId=meta?.frame_id||null;
+  $('camera-frame').dataset.frameId=meta?.frame_id||'';
+  $('camera-frame').dataset.capturedAt=meta?.captured_at||'';
   if(old)URL.revokeObjectURL(old);
  };
  $('camera-frame').src=url;$('video-unavailable').hidden=true;
@@ -302,15 +304,15 @@ async function refreshTracking(){
   if(selected?.id!==id||viewMode!=='tracking')return;
   trackingStale=!!data.stale;
   const frames=data.frames||[{observation:data.observation,jpeg:data.jpeg}];
-  if(data.stale){
-   trackingBuffer.reset();
-   if(displayFrameId!==data.observation.frame_id)displayTrackedFrame(frames.at(-1));
+  const age=Date.now()-Date.parse(data.observation.captured_at);
+  if(data.stale&&age>15000){
+   if(trackingBuffer.advanceTo(frames.at(-1)))displayTrackedFrame(frames.at(-1));
    $('scene-tag').textContent='ПОСЛЕДНИЙ АНАЛИЗ · ОЖИДАЕМ НОВЫЕ КАДРЫ';
    nextTrackingPoll=Date.now()+(selected.collector?.online?800:3000);
   }else{
    trackingBuffer.add(frames);
-   $('scene-tag').textContent='ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ';
-   nextTrackingPoll=Date.now()+200;
+   $('scene-tag').textContent=data.stale?'ПОТОК АНАЛИЗА ЗАДЕРЖИВАЕТСЯ':'ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ';
+   nextTrackingPoll=Date.now()+(data.stale?400:200);
   }
   $('model-name').textContent=data.observation.model;
   $('analysis-note').textContent='Реальный NanoDet находит транспорт; optical flow ведёт его между детекциями. ID относится к текущему проходу камеры, после потери объекта может измениться. Рамки и изображение получены вместе из облака.';
@@ -383,7 +385,7 @@ async function selectCamera(id) {
   $("pause-button").hidden = !demo;
   document.querySelector(".timeline").hidden=analysis;
   $("scene-tag").textContent = viewMode==='tracking' && !demo
-    ? (trackingStale?"ПОСЛЕДНИЙ АНАЛИЗ · ОЖИДАЕМ НОВЫЕ КАДРЫ":displayObservation?"ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ":"ОЖИДАЕМ ПЕРЕДАЧУ КАДРОВ")
+    ? (trackingStale?(!displayObservation||Date.now()-Date.parse(displayObservation.captured_at)>15000?"ПОСЛЕДНИЙ АНАЛИЗ · ОЖИДАЕМ НОВЫЕ КАДРЫ":"ПОТОК АНАЛИЗА ЗАДЕРЖИВАЕТСЯ"):displayObservation?"ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ":"ОЖИДАЕМ ПЕРЕДАЧУ КАДРОВ")
     : demo
     ? "УЧЕБНАЯ СЦЕНА"
     : selected.health === "receiving"
