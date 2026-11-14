@@ -54,3 +54,6 @@ Recovery ZIP: 32698 байт, SHA-256 c87f0c1355b68963bb8e08ded33377ac4273903519
 
 
 Итоговый [CI](https://github.com/subrosa5/roadwatch/actions/runs/43606641472) прошёл: 44 Node + 23 Python tests и E2E. Production probe после публикации подтвердил свежие кадры, vehicle ID и окно из двух последовательных кадров даже со старым одиночным collector. Новая частота отправки/качество/трекер требуют загрузки ZIP на Hostrix; на момент проверки там ещё v1. Вкладка «Источники» теперь отдаёт тот же актуальный Hostrix ZIP, что на рабочем столе; устаревшая ссылка Botkeep удалена.
+
+
+Публикация согласованного frontend/API/пакета: Sites source 9da69321fec372924fc633c44e310ed5fc810b87, deployment appgdep_6af8763016b88191a52368dfb548ced4 — succeeded, owner-private. Скачанный из production ZIP проверен побайтно через SHA-256: 32698 байт, c87f0c1355b68963bb8e08ded33377ac427390351950449e641a926f7b67cdf3, совпадает с Desktop и web/downloads. Владелец должен применить его через Upload/Unzip существующего Hostrix; удалённого доступа к панели у агента нет. Новое применение v2 на Hostrix не заявляется до фактического обновления и проверки.
