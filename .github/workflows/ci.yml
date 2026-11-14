@@ -29,6 +29,7 @@ jobs:
           /tmp/roadwatch-ci-venv/bin/python tools/test_collector.py
           /tmp/roadwatch-ci-venv/bin/python tools/test_runtime.py
           /tmp/roadwatch-ci-venv/bin/python tools/test_vehicles.py
+          /tmp/roadwatch-ci-venv/bin/python tools/test_preflight.py
       - name: Synthetic collector to Worker video round trip
         env:
           CV_PYTHON: /tmp/roadwatch-ci-venv/bin/python

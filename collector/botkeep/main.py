@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -60,6 +61,28 @@ def rss_mb(who=resource.RUSAGE_SELF):
     return value / (1024 ** 2 if platform.system() == "Darwin" else 1024)
 
 
+def tracking_profile(detector_cpu_ms, flow_cpu_ms, fire_cpu_ms, fps, memory_mib):
+    """Reserve 0.15 of the 0.5 vCPU allocation for decode/network/other work.
+
+    This is an admission estimate. A real-stream test must still pass before run.
+    Ignore cold-start cost in the sustained estimate, but report it separately.
+    """
+    warm_detector=detector_cpu_ms[2:] if len(detector_cpu_ms)>2 else detector_cpu_ms
+    detector_ms=statistics.median(warm_detector)
+    flow_ms=statistics.median(flow_cpu_ms) if flow_cpu_ms else 0.
+    other_cpu=fps*flow_ms/1000+fire_cpu_ms/5000
+    available=.35-other_cpu
+    interval=max(.5,detector_ms/1000/available) if available>0 else float('inf')
+    # Never dilute new-object detection below once a second just to pass a gate.
+    accepted=interval<=1 and memory_mib<350
+    configured=min(1.,math.ceil(interval*1000)/1000) if math.isfinite(interval) else 1.
+    return {'vehicle_detector_warm_samples':len(warm_detector),'vehicle_detector_cpu_ms_median':detector_ms,'vehicle_flow_cpu_ms_median':flow_ms,
+            'vehicle_detection_interval_seconds':round(configured,3),
+            'estimated_inference_cpu_per_second':round(other_cpu+detector_ms/1000/configured,4),
+            'resource_gate_passed':accepted,
+            'failure_reasons':([] if interval<=1 else ['sustained_inference_budget_exceeded'])+([] if memory_mib<350 else ['preflight_memory_budget_exceeded'])}
+
+
 def preflight(config, model):
     import cv2
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -80,18 +103,22 @@ def preflight(config, model):
         samples.append((time.process_time() - start) * 1000)
     from vehicles import VehicleDetector, VehicleTracker
     vehicle=VehicleDetector(config['vehicle_model'])
-    vehicle_samples=[];vehicle_detections=[]
+    vehicle_samples=[];vehicle_wall_samples=[];detector_samples=[];flow_samples=[];vehicle_detections=[]
     import numpy as np
     image=cv2.imdecode(np.frombuffer(result.stdout,np.uint8),cv2.IMREAD_COLOR)
     tracker=VehicleTracker(vehicle)
-    for i in range(12):
-        start=time.process_time();vehicle_detections=tracker.update(image,i*.2)
-        vehicle_samples.append((time.process_time()-start)*1000)
+    for i in range(30):
+        previous=tracker.last_detect;start=time.process_time();wall=time.monotonic()
+        vehicle_detections=tracker.update(image,i*.2)
+        elapsed=(time.process_time()-start)*1000
+        vehicle_samples.append(elapsed);vehicle_wall_samples.append((time.monotonic()-wall)*1000)
+        (detector_samples if tracker.last_detect!=previous else flow_samples).append(elapsed)
     vehicle_cpu_ms=max(vehicle_samples)
     # Conservative sum of process high-water marks, not a cgroup measurement.
     memory = rss_mb() + rss_mb(resource.RUSAGE_CHILDREN)
     cpu_ms = statistics.median(samples[1:])
-    return {"checked_at": datetime.now(timezone.utc).isoformat(),
+    profile=tracking_profile(detector_samples,flow_samples,cpu_ms,config.get('fps',5),memory)
+    return {**profile,"vehicle_tracking_wall_ms_max":max(vehicle_wall_samples),"checked_at": datetime.now(timezone.utc).isoformat(),
             "system": platform.system(), "machine": platform.machine(),
             "camera_network_test": camera_network_test,
             "model_sha256": model["sha256"], "labels": model["labels"],
@@ -99,7 +126,6 @@ def preflight(config, model):
             "rss_upper_estimate_mib": memory, "detections_on_probe": len(detections),
             "vehicle_tracking_cpu_ms_max":vehicle_cpu_ms,"vehicle_detections":len(vehicle_detections),
             "vehicle_tracking_tested":True,
-            "resource_gate_passed": cpu_ms < 1000 and vehicle_cpu_ms < 150 and memory < 350,
             "accuracy_validated": False, "dtp_detector": False,
             "monitoring_started": False}
 
@@ -108,12 +134,12 @@ def tracking_load(config,model):
     """Bounded real-stream throughput test, no private API or synthetic detections."""
     from collector import recording_command
     from vehicles import VehicleDetector,VehicleTracker
-    fire=Detector([model]);tracker=VehicleTracker(VehicleDetector(config['vehicle_model']))
+    fire=Detector([model]);tracker=VehicleTracker(VehicleDetector(config['vehicle_model']),detect_interval=config.get('vehicle_detection_interval_seconds',.5))
     import cv2,numpy as np
-    frames=0;tracked=0;last_hash=None;first=None;last_fire=-1e9;started=time.monotonic();cpu=time.process_time()
+    frames=0;tracked=0;stale_frames=0;max_age=0.;last_hash=None;first=None;last_fire=-1e9;started=time.monotonic();cpu=time.process_time()
     with tempfile.TemporaryDirectory(dir=ROOT/'data') as temporary:
         directory=Path(temporary)
-        process=subprocess.Popen(recording_command(config['cameras'][0]['stream_url'],directory,5,imageio_ffmpeg.get_ffmpeg_exe()),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        process=subprocess.Popen(recording_command(config['cameras'][0]['stream_url'],directory,config.get('fps',5),imageio_ffmpeg.get_ffmpeg_exe()),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
             while time.monotonic()-started<45 and (first is None or time.monotonic()-first<20):
                 time.sleep(.02);path=directory/'frame.jpg'
@@ -122,6 +148,8 @@ def tracking_load(config,model):
                 hashed=hashlib.sha256(jpeg).hexdigest()
                 if hashed==last_hash:continue
                 last_hash=hashed
+                age=max(0,time.time()-timestamp);max_age=max(max_age,age)
+                if age>1:stale_frames+=1
                 if first is None:first=time.monotonic()
                 image=cv2.imdecode(np.frombuffer(jpeg,np.uint8),cv2.IMREAD_COLOR)
                 tracks=tracker.update(image,timestamp);tracked+=len(tracks);frames+=1
@@ -136,7 +164,7 @@ def tracking_load(config,model):
     cgroup_peak=None
     try:cgroup_peak=int(Path('/sys/fs/cgroup/memory.peak').read_text())/1024**2
     except (OSError,ValueError):pass
-    result={'cgroup_memory_peak_mib':cgroup_peak,'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=3 and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<384 and (cgroup_peak is None or cgroup_peak<448)}
+    result={'cgroup_memory_peak_mib':cgroup_peak,'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'target_fps':config.get('fps',5),'max_frame_age_seconds':max_age,'stale_frames':stale_frames,'vehicle_detection_interval_seconds':config.get('vehicle_detection_interval_seconds',.5),'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=.8*config.get('fps',5) and stale_frames<=.05*max(1,frames) and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<384 and (cgroup_peak is None or cgroup_peak<448)}
     print(json.dumps(result),flush=True)
     if not result['throughput_gate_passed']:raise RuntimeError('Real tracking throughput gate did not pass')
 
@@ -163,7 +191,9 @@ def main():
     print(json.dumps(report), flush=True)
     if not report["resource_gate_passed"]:
         raise RuntimeError("Resource gate did not pass")
-    if os.environ.get("ROADWATCH_TRACKING_LOAD_TEST")=="1":tracking_load(config,model)
+    config['vehicle_detection_interval_seconds']=report['vehicle_detection_interval_seconds']
+    PHASE='tracking_throughput_preflight'
+    tracking_load(config,model)
     if mode == "preflight": return
     PHASE = "runtime_configuration"
     if not report["camera_network_test"]:
@@ -186,5 +216,7 @@ if __name__ == "__main__":
     except Exception as error:
         # Network exceptions can embed redirected signed download URLs. Keep
         # their contents out of hosted logs; the exception type still aids triage.
-        print(json.dumps({"startup_failed": type(error).__name__, "phase": PHASE, "monitoring_started": False}), flush=True)
+        reasons={"Resource gate did not pass":"sustained_resource_budget_exceeded","Real tracking throughput gate did not pass":"tracking_throughput_or_freshness_gate_failed","FFmpeg failed to obtain a camera JPEG":"camera_decode_failed"}
+        reason=reasons.get(str(error),'see_previous_stage_report') if isinstance(error,RuntimeError) else 'see_previous_stage_report'
+        print(json.dumps({"reason":reason,"startup_failed": type(error).__name__, "phase": PHASE, "monitoring_started": False}), flush=True)
         sys.exit(1)

@@ -26,3 +26,13 @@ Manual workflow `.github/workflows/hostrix-install.yml` собирает recover
 На самом Hostrix нужно получить `dependencies_ready`, `isolated_imports_verified` и успешный результат model/camera preflight. Если панель снова запускает автоустановщик до `disk_diagnostics`, выбранные Startup settings не применились либо провайдер не позволяет его отключить. Повторять установку вслепую нельзя.
 
 Документация: https://pip.pypa.io/en/stable/topics/caching/ и https://pip.pypa.io/en/stable/cli/pip_install/ . У OpenCV все варианты используют namespace cv2; нужно выбирать только один: https://pypi.org/project/opencv-python-headless/ .
+
+## Реальный результат Hostrix и калибровка скорости
+
+Лог владельца от 14.11: isolated_imports_verified=true, installed_mib=381.52; свежая Iowa камера доступна, hashes моделей прошли; fire CPU median 51.59 мс, RSS upper sum 219.38 МиБ. Preflight отверг запуск из-за vehicle_tracking_cpu_ms_max=363.89 мс при прежнем пороге 150 мс. По одному максимуму неизвестно, был ли виноват только холодный запуск; прогретая статистика тогда не печаталась.
+
+Исправление измеряет 30 вызовов tracker, отдельно detector/flow, исключает первые две detector-инициализации из медианы и сохраняет максимальные CPU/wall времена в отчёте. Для 0.5 vCPU inference получает бюджет 0.35 CPU-сек/сек, остальное резервируется декодированию, сети и служебной работе. При необходимости новые детекции выполняются реже (интервал 0.5–1 секунды), optical flow/выход остаются целевыми 5 fps; ниже 1 Hz detector ради прохождения gate не опускается. Это оценка допуска, не подмена измерения throughput.
+
+После допуска **каждый preflight/run** выполняет реальную 20-секундную проверку потока с обеими моделями, кольцом FFmpeg и выбранным cadence. Требуются >=80% целевого fps, <=5% кадров старше секунды и сохранённые лимиты памяти. Без успешного throughput_gate_passed мониторинг не начинается. В collector polling четверть frame interval вместо полного interval: время inference больше не добавляется к полной паузе между каждым кадром.
+
+Для обновления на Hostrix достаточно распаковать свежий recovery ZIP с заменой файлов через обычный Unzip. Не использовать Redeploy, который удаляет .rw-packages/data. Версии зависимостей и hashes моделей не менялись, поэтому повторная загрузка 382 МиБ не нужна. Startup command остаётся python3 -u hostrix_bootstrap.py --repair, автоматический installer выключен. Новые результаты необходимо получить на самом Hostrix — успешный Linux CI не заменяет этот этап.

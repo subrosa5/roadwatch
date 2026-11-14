@@ -228,11 +228,11 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     last_hash = None
     last_incident=-float('inf')
-    tracker=VehicleTracker(VehicleDetector(settings['vehicle_model'])) if settings.get('vehicle_model') else None
+    tracker=VehicleTracker(VehicleDetector(settings['vehicle_model']),detect_interval=settings.get('vehicle_detection_interval_seconds',.5)) if settings.get('vehicle_model') else None
     clips = set()
     try:
         while process.returncode is None:
-            await asyncio.sleep(min(.5, 1 / fps))
+            await asyncio.sleep(min(.5, 1 / fps / 4))
             for task in list(clips):
                 if task.done():
                     clips.remove(task)
