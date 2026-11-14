@@ -86,7 +86,7 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     const view=await demand(id,auth);if(!view.active||!view.kinds.includes('tracking'))return {stored:false,reason:'no_viewer'};
     const raw=await bodyJSON(request),items=raw.frames||[raw];
     if(!Array.isArray(items)||items.length<1||items.length>12)fail('Invalid tracking batch');
-    const frames=[];let previous=-Infinity;
+    let frames=[];let previous=-Infinity;
     for(const item of items){
       const o=observation(item.observation),timestamp=Date.parse(o.captured_at);
       if(o.camera_id!==id||o.detections.some(d=>d.label!=='vehicle'))fail('Invalid tracking camera or labels');
@@ -103,7 +103,10 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     }
     const latest=frames.at(-1).observation;
     if(Date.now()-Date.parse(latest.captured_at)>5000)fail('Tracking frame too old');
-    if(Date.parse(latest.captured_at)-Date.parse(frames[0].observation.captured_at)>4000)fail('Tracking batch spans too much time');
+    // A scheduling/network pause may mix old buffered frames with a fresh tail.
+    // Validate every pair above, then discard the obsolete prefix for display.
+    // The latest frame must still pass the same five-second freshness limit.
+    frames=frames.filter(f=>Date.parse(f.observation.captured_at)>=Date.parse(latest.captured_at)-3000);
     // Keep a bounded recent window so browser polling cannot miss an entire
     // packet. Retained frames do not spend the daily display quota again.
     const old=await env.BUCKET.get(key);

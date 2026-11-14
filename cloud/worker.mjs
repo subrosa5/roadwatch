@@ -695,6 +695,17 @@ export function createWorker(fetcher = fetch) {
         }
         fail("Not found", 404);
       } catch (error) {
+        if(request.method==='POST'&&/^\/api\/cameras\/[a-z0-9-]{1,80}\/tracking$/.test(new URL(request.url).pathname)){
+          const codes={
+            'Tracking frame too old':'frame_expired','Stale or future frame':'invalid_frame_time',
+            'Tracking frames must be chronological':'frame_order','Invalid tracking identity':'track_identity',
+            'Tracking frame hash mismatch':'frame_hash','Box must be normalized [x,y,width,height]':'invalid_box',
+            'Invalid tracking batch':'batch_shape','Invalid JSON':'invalid_json','Request too large':'body_size',
+            'Invalid tracking JPEG':'jpeg_encoding','JPEG required':'jpeg_format',
+          };
+          // Only fixed codes: never log payloads, credentials or error contents.
+          console.warn(JSON.stringify({component:'tracking_ingest',status:error instanceof InputError?error.status:500,code:error instanceof InputError?(codes[error.message]||'validation_rejected'):'storage_error'}));
+        }
         return json(
           {
             error:

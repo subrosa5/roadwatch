@@ -463,3 +463,27 @@ test('tracking relay retains recent packets without charging retained or retried
  assert.equal((await(await s.post(path+'/tracking',{frames:[b,c]})).json()).frames_stored,0);
  assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,3);
 });
+
+test('delayed tracking packet discards old prefix and stores its fresh matching frame',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking'},true);
+ const time=Date.now()-250;
+ async function frame(i,at){const b=Buffer.from([255,216,255,i]);return {observation:{...obs(Buffer.from(await crypto.subtle.digest('SHA-256',b)).toString('hex'),at),camera_id:'iowa-cbtv51',demo:false,detections:[]},jpeg:b.toString('base64')};}
+ const old=await frame(80,time-6000),latest=await frame(81,time);
+ const result=await s.post(path+'/tracking',{frames:[old,latest]});assert.equal(result.status,200);
+ const data=await(await s.call(path+'/tracking')).json();assert.equal(data.stale,false);assert.equal(data.frames.length,1);assert.equal(data.observation.frame_id,latest.observation.frame_id);
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,1);
+ const expired=await frame(82,time-8000);
+ assert.equal((await s.post(path+'/tracking',{frames:[expired]})).status,400);
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,1,'expired frames must not spend quota');
+});
+
+test('tracking rejection diagnostics contain fixed codes without request secrets',async t=>{
+ const logs=[];t.mock.method(console,'warn',value=>logs.push(JSON.parse(value)));
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking'},true);
+ const payload={observation:{...obs('invalid-sha',Date.now()),camera_id:'iowa-cbtv51',demo:false,detections:[],model:'private-payload-do-not-log'},jpeg:Buffer.from([255,216,255,7]).toString('base64')};
+ assert.equal((await s.post(path+'/tracking',payload)).status,400);
+ assert.deepEqual(logs,[{component:'tracking_ingest',status:400,code:'frame_hash'}]);
+ assert.equal(JSON.stringify(logs).includes(payload.observation.model),false);
+});

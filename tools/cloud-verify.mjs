@@ -51,6 +51,30 @@ if(input.operation==='package'){
  const hash=createHash('sha256').update(bytes).digest('hex');
  if(input.expected_sha256&&hash!==input.expected_sha256)throw Error('Published ZIP differs from verified archive');
  console.log(JSON.stringify({published_package_verified:true,bytes:bytes.length,sha256:hash}));
+} else if(input.operation==='tracking-soak') {
+ const duration=Math.max(30,Math.min(300,Number(input.duration_seconds)||180));
+ const viewer='probe-'+crypto.randomUUID(),path='/api/cameras/iowa-cbtv51';
+ const started=Date.now(),ids=new Set(),trackIds=new Set();
+ let renewed=0,reported=0,samples=0,fresh=0,measured=0,errors=0,restarts=0,lastUptime=null,maxAge=0,lastModel=null,lastStale=true,lastCollector=null;
+ try{
+  while(Date.now()-started<duration*1000){
+   try{
+    if(Date.now()-renewed>15000){await post(path+'/view',{kind:'tracking',viewer_id:viewer});renewed=Date.now();}
+    const d=await(await call(path+'/tracking')).json();samples++;lastStale=!!d.stale;lastModel=d.observation.model;
+    const age=Date.now()-Date.parse(d.observation.captured_at);
+    if(Date.now()-started>15000){measured++;if(!d.stale)fresh++;maxAge=Math.max(maxAge,age);}
+    for(const f of d.frames||[{observation:d.observation}]){ids.add(f.observation.frame_id);for(const t of f.observation.detections)if(t.track_id)trackIds.add(t.track_id);}
+    if(Date.now()-reported>15000){
+     const cs=await(await call('/api/cameras')).json();lastCollector=cs.find(c=>c.id==='iowa-cbtv51')?.collector;
+     if(lastCollector?.online){if(lastUptime!==null&&lastCollector.uptime_seconds+10<lastUptime)restarts++;lastUptime=lastCollector.uptime_seconds;}
+     reported=Date.now();
+     console.log(JSON.stringify({elapsed_seconds:Math.round((Date.now()-started)/1000),frame_age_ms:age,latest_stale:lastStale,model:lastModel,unique_frames:ids.size,unique_track_ids:trackIds.size,collector_online:lastCollector?.online,restarts}));
+    }
+   }catch{errors++;}
+   await new Promise(r=>setTimeout(r,1000));
+  }
+  console.log(JSON.stringify({tracking_soak_completed:true,synthetic_data:false,duration_seconds:Math.round((Date.now()-started)/1000),samples,measured_after_warmup:measured,fresh_samples:fresh,fresh_fraction:measured?fresh/measured:0,max_frame_age_ms:maxAge,unique_frames:ids.size,unique_track_ids:trackIds.size,api_errors:errors,restarts,latest_stale:lastStale,model:lastModel,collector_online:lastCollector?.online}));
+ }finally{await call(path+'/view',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({viewer_id:viewer})}).catch(()=>{});}
 } else if(input.operation==='tracking-probe') {
   for(let i=0;i<(input.maintain_view?15:6);i++){
     if(input.maintain_view&&i%4===0)await post('/api/cameras/iowa-cbtv51/view',{kind:'tracking'});
