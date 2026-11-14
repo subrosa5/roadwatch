@@ -48,3 +48,14 @@
 | GET `/api/stats` | collectors_online, monitoring, preview_quota, maintenance |
 
 400 означает невалидный payload; 401/403 — исправить роль/секрет или разрешение камеры; 404 preview до первого кадра нормален; 409 evidence — повторить позже при активной резервации; 429/507 — лимит, не обходить ротацией идентификаторов. Коллектор прекращает повторную публикацию при квоте до смены суток UTC. Сетевые повторы ограничены и не следуют redirects с секретами.
+
+## Подтверждение публикации 14.11.2026
+
+- GitHub implementation commit: `e973bdd`; [полные проверки](https://github.com/subrosa5/roadwatch/actions/runs/43554254036) завершены success: 36 Node + 13 Python и полный синтетический FFmpeg/Worker/R2 round trip на Linux.
+- [Повторный реальный resource probe](https://github.com/subrosa5/roadwatch/actions/runs/43554249524): success, свежий кадр Iowa, реальная огонь/дым модель, 0.5 CPU / 512 МиБ; CPU median **31.74 мс**, сумма process high-water RSS **225.27 МиБ**. `accuracy_validated=false`, `monitoring_started=false`.
+- Sites source commit `5d22b362e44484ea2a30d31d2aa06612e76eded4`, deployment `appgdep_6af7dc55a5288191b0a7f0f0cabc370c`, status succeeded. Приватность owner-only сохранена.
+- Production runtime API: primary enabled, reserve disabled, collectors_online=0, real_events=0, push_subscriptions=0. Проверены создание/удаление viewer lease, public VAPID key, обслуживание D1/R2 и недоступность приватного журнала анониму. Тест не публиковал ложных heartbeat/наблюдений от реальных камер и не подписывал устройства.
+- ZIP доступен на самом фронте: 17012 байт; SHA-256 `402b7395fb34421ed4e82a06fa57848ca0ad356e652610775203b1ee73a651e8`. Внутри девять разрешённых файлов, без секретов, весов и runtime-данных.
+- Browser test опубликованной версии: CBTV51 480×270 и WWDTV039 768×432, readyState=4, прогресс воспроизведения сохраняется через API polling, unverified overlay отсутствует, uncaught errors=0. Для тестового браузера использован Node HTTPS bridge; Sites credentials передавались только собственному origin, Iowa их не получала. Это не проверка сети на устройстве владельца.
+
+Только документация и снимок после публикации добавлены следующим коммитом GitHub; исполняемый исходный код соответствует указанному deployment.
