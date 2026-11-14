@@ -1,5 +1,5 @@
 // Credentials enter via hidden stdin only; never arguments, files, or logs.
-import { readFile } from "node:fs/promises";
+import { readFile,writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 const input = await new Promise((resolve, reject) => {
   let value = "";
@@ -46,7 +46,33 @@ const post = (path, body) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-if(input.operation==='runtime') {
+if(input.operation==='tracking-probe') {
+  for(let i=0;i<(input.maintain_view?15:6);i++){
+    if(input.maintain_view&&i%4===0)await post('/api/cameras/iowa-cbtv51/view',{kind:'tracking'});
+    const started=Date.now();
+    const r=await fetch(new URL('/api/cameras/iowa-cbtv51/tracking',origin),{headers,redirect:'manual',signal:AbortSignal.timeout(15000)});
+    if(!r.ok)console.log(JSON.stringify({status:r.status}));else {
+      const d=await r.json();const jpeg=Buffer.from(d.jpeg,'base64');
+      await writeFile('/private/tmp/roadwatch-hostrix-frame.jpg',jpeg);
+      console.log(JSON.stringify({latency_ms:Date.now()-started,frame_id:d.observation.frame_id,captured_at:d.observation.captured_at,age_ms:Date.now()-Date.parse(d.observation.captured_at),stale:d.stale,tracks:d.observation.detections,jpeg_bytes:jpeg.length}));
+    }
+    if(i<(input.maintain_view?14:5))await new Promise(r=>setTimeout(r,1000));
+  }
+} else if(input.operation==='status') {
+  const stats=await(await call('/api/stats')).json();
+  const cs=await(await call('/api/cameras')).json();
+  const camera=cs.find(c=>c.id==='iowa-cbtv51');
+  const journal=await(await call('/api/events')).json();
+  const demand=await(await call('/api/cameras/iowa-cbtv51/demand')).json();
+  const tr=await fetch(new URL('/api/cameras/iowa-cbtv51/tracking',origin),{headers,redirect:'manual',signal:AbortSignal.timeout(15000)});
+  const tracking=tr.ok?await tr.json():{http_status:tr.status,error:(await tr.text()).slice(0,120)};
+  if(tracking.jpeg)tracking.jpeg_bytes=Buffer.from(tracking.jpeg,'base64').length;
+  delete tracking.jpeg;
+  let frame=null;
+  const r=await fetch(new URL('/api/cameras/iowa-cbtv51/frame',origin),{headers,redirect:'manual',signal:AbortSignal.timeout(15000)});
+  if(r.ok){const bytes=Buffer.from(await r.arrayBuffer());frame={bytes:bytes.length,id:r.headers.get('X-Frame-ID'),jpeg:bytes[0]===255&&bytes[1]===216};}
+  console.log(JSON.stringify({collectors_online:stats.collectors_online,monitoring:stats.monitoring,collector:camera?.collector,latest_observation:camera?.latest?{frame_id:camera.latest.frame_id,captured_at:camera.latest.captured_at,model:camera.latest.model,detections:camera.latest.detections.length}:null,snapshot:frame,demand,tracking,real_events:journal.length,daily_frames:stats.daily_frames,tracking_quota:stats.tracking_quota}));
+} else if(input.operation==='runtime') {
   await post('/api/ops/init',{});
   const cameras=await (await call('/api/cameras')).json();
   const first=cameras.find(c=>c.id==='iowa-cbtv51');
@@ -68,7 +94,7 @@ if(input.operation==='runtime') {
   const anonymous=await fetch(new URL('/api/events',origin),{redirect:'manual'});
   if(anonymous.ok&&anonymous.headers.get('content-type')?.includes('application/json'))throw Error('Anonymous journal exposed');
   console.log(JSON.stringify({runtime_api_verified:true,source_enabled:true,reserve_enabled:false,collector_online:stats.collectors_online,real_events:real.length,preview_daily_limit:stats.preview_daily_limit,push_available:settings.available,push_subscriptions:settings.subscriptions,viewer_lease_verified:true,private_boundary:true,download_zip_bytes:bytes.length,download_zip_sha256:createHash('sha256').update(bytes).digest('hex'),maintenance}));
-} else if (["browser", "live"].includes(input.operation)) {
+} else if (["browser", "live", "tracking-browser"].includes(input.operation)) {
   const { chromium } = await import("@playwright/test");
   const browser = await chromium.launch({
     headless: true,
@@ -77,8 +103,9 @@ if(input.operation==='runtime') {
   const page = await browser.newPage({
     viewport: { width: 1512, height: 1100 },
   });
-  const errors = [];
+  const errors = [],trackingSamples=[];
   page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console",m=>{if(input.operation==='tracking-browser'&&m.type()==='error')console.log(JSON.stringify({browser_console_error:m.text().slice(0,500)}));});
   await page.route("**/*", async (route) => {
     if (
       route.request().url().startsWith("blob:") ||
@@ -107,14 +134,36 @@ if(input.operation==='runtime') {
     delete returned["content-encoding"];
     delete returned["content-length"];
     delete returned["transfer-encoding"];
-    return route.fulfill({
-      status: response.status,
-      headers: returned,
-      body: Buffer.from(await response.arrayBuffer()),
-    });
+    const bytes=Buffer.from(await response.arrayBuffer());
+    if(input.operation==='tracking-browser'&&same&&new URL(request.url()).pathname.endsWith('/tracking')&&response.ok){
+      const data=JSON.parse(bytes.toString());
+      trackingSamples.push({frame_id:data.observation.frame_id,captured_at:data.observation.captured_at,model:data.observation.model,stale:data.stale,detections:data.observation.detections});
+    }
+    return route.fulfill({status:response.status,headers:returned,body:bytes});
   });
   try {
-    if (input.operation === "live") {
+    if(input.operation==='tracking-browser') {
+      const documentResponse=await page.goto(origin.href);
+      console.log(JSON.stringify({browser_visibility:await page.evaluate(()=>document.visibilityState),content_security_policy:documentResponse.headers()['content-security-policy']||null}));
+      await page.waitForFunction(()=>document.querySelectorAll('#camera-picker .camera-choice').length===2);
+      await page.locator('[data-camera="iowa-cbtv51"]').click();
+      await page.locator('#mode-tracking').click();
+      await page.waitForFunction(()=>{const im=document.getElementById('camera-frame');return im.complete&&im.naturalWidth>0&&document.getElementById('video-unavailable').hidden;},null,{timeout:35000});
+      const first=await page.locator('#camera-frame').getAttribute('src');
+      await page.waitForFunction(src=>document.getElementById('camera-frame').src!==src,first,{timeout:15000});
+      const waitUntil=Date.now()+12000;
+      while(Date.now()<waitUntil&&!trackingSamples.some(s=>s.detections.length))await page.waitForTimeout(1000);
+      if(await page.locator('#overlay').isHidden())throw Error('Tracking overlay hidden');
+      if(!(await page.locator('#camera-live').isHidden()))throw Error('Tracking mixed with unmatched HLS');
+      const ids=new Set(trackingSamples.map(s=>s.frame_id));
+      const trackIds=new Set(trackingSamples.flatMap(s=>s.detections.map(d=>d.track_id)));
+      const stats=await(await call('/api/stats')).json();
+      if(errors.length)throw Error('UI errors: '+errors.join(', '));
+      if(!stats.monitoring)throw Error('Collector no longer online');
+      if(ids.size<2||trackingSamples.at(-1)?.stale)throw Error('Tracking frames not advancing');
+      await page.screenshot({path:'docs/screenshots/hostrix-tracking.png',fullPage:true});
+      console.log(JSON.stringify({production_tracking_verified:true,synthetic_data:false,collectors_online:stats.collectors_online,real_frame_ids:ids.size,samples:trackingSamples.length,max_visible_tracks:Math.max(0,...trackingSamples.map(s=>s.detections.length)),unique_track_ids:trackIds.size,model:trackingSamples.at(-1)?.model,latest_captured_at:trackingSamples.at(-1)?.captured_at,overlay_visible:true,matching_frame_mode:true,uncaught_errors:errors.length}));
+    } else if (input.operation === "live") {
       await post("/api/ops/init", {});
       await page.goto(origin.href);
       await page.waitForFunction(

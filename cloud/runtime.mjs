@@ -31,14 +31,21 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
   }
   async function viewing(id,request,auth) {
     await camera(id);
-    if(request.method==='DELETE') {await stmt(env,'DELETE FROM rw_probes WHERE source_id=?','view:'+id).run();return {active:false};}
-    const raw=await bodyJSON(request),kind=raw.kind||'analysis';if(!['analysis','tracking'].includes(kind))fail('Invalid viewer mode');
-    const until=new Date(Date.now()+35000).toISOString();await write('view:'+id,{until,kind});return {active:true,until};
+    const raw=request.method==='DELETE'&&!request.headers.get('content-type')?{}:await bodyJSON(request);
+    const viewer=raw.viewer_id;
+    if(viewer!==undefined&&(typeof viewer!=='string'||! /^[a-zA-Z0-9-]{1,80}$/.test(viewer)))fail('Invalid viewer ID');
+    const key='view:'+id+(viewer?':'+viewer:'');
+    if(request.method==='DELETE'){await stmt(env,'DELETE FROM rw_probes WHERE source_id=?',key).run();return {active:false};}
+    const kind=raw.kind||'analysis';if(!['analysis','tracking'].includes(kind))fail('Invalid viewer mode');
+    const until=new Date(Date.now()+35000).toISOString();await write(key,{until,kind});return {active:true,until};
   }
   async function demand(id,auth) {
     if(!auth.service)fail('Collector role required',403);
     await camera(id);
-    const v=await read('view:'+id);return {active:!!v&&Date.parse(v.until)>Date.now(),until:v?.until||null,kind:v?.kind||'analysis',preview_interval_seconds:5};
+    const leases=await rows(env,'SELECT data FROM rw_probes WHERE source_id=? OR source_id LIKE ?','view:'+id,'view:'+id+':%');
+    const active=leases.map(r=>JSON.parse(r.data)).filter(v=>Date.parse(v.until)>Date.now());
+    const kinds=[...new Set(active.map(v=>v.kind||'analysis'))];
+    return {active:!!active.length,until:active.map(v=>v.until).sort().at(-1)||null,kind:kinds.includes('tracking')?'tracking':'analysis',kinds,preview_interval_seconds:5,tracking_format:'batch-v1'};
   }
   async function preview(id,request,auth) {
     await camera(id);
@@ -69,26 +76,38 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     await camera(id);const key='tracking/'+id+'.json';
     if(request.method==='GET') {
       const object=await env.BUCKET.get(key);if(!object)fail('No tracking frames yet',404);
-      const data=JSON.parse(await new Response(object.body).text());
-      return {...data,stale:Date.now()-Date.parse(data.observation.captured_at)>3000};
+      const stored=JSON.parse(await new Response(object.body).text());
+      const frames=stored.frames||[{observation:stored.observation,jpeg:stored.jpeg}];
+      const latest=frames.at(-1),age=Date.now()-Date.parse(latest.observation.captured_at);
+      return {...latest,frames,stale:age>5000,frame_age_ms:age,received_at:stored.received_at||null,server_now:now()};
     }
     if(!auth.service)fail('Collector role required',403);
-    const view=await demand(id,auth);if(!view.active||view.kind!=='tracking')return {stored:false,reason:'no_viewer'};
-    const raw=await bodyJSON(request),o=observation(raw.observation);
-    if(o.camera_id!==id||o.detections.some(d=>d.label!=='vehicle'))fail('Invalid tracking camera or labels');
-    if(Date.now()-Date.parse(o.captured_at)>5000)fail('Tracking frame too old');
-    let bytes;try{if(typeof raw.jpeg!=='string'||raw.jpeg.length>350000)throw Error();bytes=Uint8Array.from(atob(raw.jpeg),c=>c.charCodeAt(0));}catch{fail('Invalid tracking JPEG');}
-    if(bytes.length>256*1024||bytes[0]!==255||bytes[1]!==216||bytes[2]!==255)fail('JPEG required');
-    if(await sha256(bytes)!==o.frame_id)fail('Tracking frame hash mismatch');
-    o.detections=o.detections.map((d,i)=>{
-      const source=raw.observation.detections[i];
-      if(typeof source.track_id!=='string'||! /^[a-zA-Z0-9-]{1,60}$/.test(source.track_id)||!['detector','optical_flow'].includes(source.tracking_method))fail('Invalid tracking identity');
-      return {...d,track_id:source.track_id,tracking_method:source.tracking_method};
-    });
-    const reserved=await stmt(env,`INSERT INTO rw_probes(source_id,checked_at,data) VALUES(?,?,json_object('count',1)) ON CONFLICT(source_id) DO UPDATE SET checked_at=excluded.checked_at,data=json_set(rw_probes.data,'$.count',json_extract(rw_probes.data,'$.count')+1) WHERE json_extract(rw_probes.data,'$.count')<24000`,'tracking-quota:'+now().slice(0,10),now()).run();
+    const view=await demand(id,auth);if(!view.active||!view.kinds.includes('tracking'))return {stored:false,reason:'no_viewer'};
+    const raw=await bodyJSON(request),items=raw.frames||[raw];
+    if(!Array.isArray(items)||items.length<1||items.length>12)fail('Invalid tracking batch');
+    const frames=[];let previous=-Infinity;
+    for(const item of items){
+      const o=observation(item.observation),timestamp=Date.parse(o.captured_at);
+      if(o.camera_id!==id||o.detections.some(d=>d.label!=='vehicle'))fail('Invalid tracking camera or labels');
+      if(timestamp<=previous)fail('Tracking frames must be chronological');previous=timestamp;
+      let bytes;try{if(typeof item.jpeg!=='string'||item.jpeg.length>350000)throw Error();bytes=Uint8Array.from(atob(item.jpeg),c=>c.charCodeAt(0));}catch{fail('Invalid tracking JPEG');}
+      if(bytes.length>256*1024||bytes[0]!==255||bytes[1]!==216||bytes[2]!==255)fail('JPEG required');
+      if(await sha256(bytes)!==o.frame_id)fail('Tracking frame hash mismatch');
+      o.detections=o.detections.map((d,i)=>{
+        const source=item.observation.detections[i];
+        if(typeof source.track_id!=='string'||! /^[a-zA-Z0-9-]{1,60}$/.test(source.track_id)||!['detector','optical_flow'].includes(source.tracking_method))fail('Invalid tracking identity');
+        return {...d,track_id:source.track_id,tracking_method:source.tracking_method};
+      });
+      frames.push({observation:o,jpeg:item.jpeg});
+    }
+    const latest=frames.at(-1).observation;
+    if(Date.now()-Date.parse(latest.captured_at)>5000)fail('Tracking frame too old');
+    if(Date.parse(latest.captured_at)-Date.parse(frames[0].observation.captured_at)>4000)fail('Tracking batch spans too much time');
+    const count=frames.length;
+    const reserved=await stmt(env,`INSERT INTO rw_probes(source_id,checked_at,data) VALUES(?,?,json_object('count',?)) ON CONFLICT(source_id) DO UPDATE SET checked_at=excluded.checked_at,data=json_set(rw_probes.data,'$.count',json_extract(rw_probes.data,'$.count')+?) WHERE json_extract(rw_probes.data,'$.count')+?<=24000`,'tracking-quota:'+now().slice(0,10),now(),count,count,count).run();
     if(!reserved.meta.changes)fail('Daily tracking display quota reached',429);
-    await env.BUCKET.put(key,new TextEncoder().encode(JSON.stringify({observation:o,jpeg:raw.jpeg})),{httpMetadata:{contentType:'application/json'},customMetadata:{captured_at:o.captured_at}});
-    return {stored:true,frame_id:o.frame_id};
+    await env.BUCKET.put(key,new TextEncoder().encode(JSON.stringify({frames,received_at:now()})),{httpMetadata:{contentType:'application/json'},customMetadata:{captured_at:latest.captured_at}});
+    return {stored:true,frame_id:latest.frame_id,frames_stored:count};
   }
   async function pushSettings() {
     const {publicKey}=await signingKey(env.INGEST_TOKEN);

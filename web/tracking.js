@@ -1,0 +1,24 @@
+// Playout of actual image/annotation pairs; no extrapolated vehicle positions.
+export class TrackingBuffer {
+  constructor(){this.reset();}
+  reset(){this.queue=[];this.last=-Infinity;this.anchor=null;}
+  add(frames){
+    for(const frame of frames){
+      const at=Date.parse(frame?.observation?.captured_at);
+      if(!Number.isFinite(at)||at<=this.last||this.queue.some(f=>f.observation.frame_id===frame.observation.frame_id))continue;
+      this.queue.push(frame);
+    }
+    this.queue.sort((a,b)=>Date.parse(a.observation.captured_at)-Date.parse(b.observation.captured_at));
+    if(this.queue.length>24){this.queue=this.queue.slice(-24);this.anchor=null;}
+  }
+  take(now){
+    if(!this.queue.length)return null;
+    const first=Date.parse(this.queue[0].observation.captured_at);
+    if(!this.anchor||first-(this.anchor.at+now-this.anchor.wall)>1500)this.anchor={at:first,wall:now};
+    const due=this.anchor.at+now-this.anchor.wall;
+    let result=null;
+    while(this.queue.length&&Date.parse(this.queue[0].observation.captured_at)<=due)result=this.queue.shift();
+    if(result)this.last=Date.parse(result.observation.captured_at);
+    return result;
+  }
+}

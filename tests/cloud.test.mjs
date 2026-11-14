@@ -415,3 +415,31 @@ test('tracking keeps real IDs and atomic JPEG, rejects mismatches, and never cre
  s.sql.prepare("UPDATE rw_probes SET data=json_object('count',24000) WHERE source_id LIKE 'tracking-quota:%'").run();
  assert.equal((await s.post(path+'/tracking',payload)).status,429);
 });
+
+test('tracking batches preserve order, charge each frame and remain fresh at four seconds',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking',viewer_id:'tab-A'},true);
+ const frames=await Promise.all([0,1,2].map(async i=>{
+  const bytes=Buffer.from([255,216,255,i]);
+  const frame_id=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+  return {observation:{...obs(frame_id,Date.now()-4400+i*200,'vehicle'),camera_id:'iowa-cbtv51',demo:false,detections:[]},jpeg:bytes.toString('base64')};
+ }));
+ assert.equal((await s.post(path+'/tracking',{frames:[...frames].reverse()})).status,400);
+ assert.equal((await s.post(path+'/tracking',{frames})).status,200);
+ const d=await(await s.call(path+'/tracking')).json();assert.equal(d.frames.length,3);assert.equal(d.stale,false);
+ assert.equal(d.frame_age_ms>=4000,true);assert.equal(d.jpeg,frames[2].jpeg);assert.deepEqual(d.frames.map(f=>f.jpeg),frames.map(f=>f.jpeg));
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,3);
+ s.sql.prepare("UPDATE rw_probes SET data=json_object('count',23998) WHERE source_id LIKE 'tracking-quota:%'").run();
+ assert.equal((await s.post(path+'/tracking',{frames})).status,429);
+ assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,23998);
+});
+
+test('each viewer releases only its own lease and demand includes both modes',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking',viewer_id:'A'},true);
+ await s.post(path+'/view',{kind:'analysis',viewer_id:'B'},true);
+ let d=await(await s.call(path+'/demand')).json();assert.deepEqual(d.kinds.sort(),['analysis','tracking']);assert.equal(d.tracking_format,'batch-v1');
+ await s.call(path+'/view',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({viewer_id:'B'})},true);
+ d=await(await s.call(path+'/demand')).json();assert.equal(d.active,true);assert.deepEqual(d.kinds,['tracking']);
+ await s.call(path+'/view',{method:'DELETE'},true);assert.equal((await(await s.call(path+'/demand')).json()).active,true);
+});

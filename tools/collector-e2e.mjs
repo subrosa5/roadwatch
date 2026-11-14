@@ -19,6 +19,7 @@ const BUCKET={async put(key,bytes,opts={}){objects.set(key,{bytes:Buffer.from(by
 const token=randomBytes(32).toString('hex'),env={DB,BUCKET,INGEST_TOKEN:token},worker=createWorker();
 const server=createServer(async(req,res)=>{
  try{const parts=[];for await(const b of req)parts.push(b);
+ if(req.url.endsWith('/tracking')&&req.method==='POST')await new Promise(r=>setTimeout(r,600));
  const response=await worker.fetch(new Request('https://loopback.test'+req.url,{method:req.method,headers:req.headers,body:['GET','HEAD'].includes(req.method)?undefined:Buffer.concat(parts)}),env);
  res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
  }catch{res.writeHead(500);res.end('Test harness failed');}
@@ -39,18 +40,20 @@ try{
   const r=await call('/api/cameras/iowa-cbtv51/preview');if(r.ok)preview=await r.json();
   if(preview&&!switched){await call('/api/cameras/iowa-cbtv51/view','POST',{kind:'tracking'});switched=true;}
   const tr=await call('/api/cameras/iowa-cbtv51/tracking');if(tr.ok)tracking=await tr.json();
-  if(event?.evidence_id&&preview&&tracking?.observation?.detections?.length&&stats.collectors_online===1)break;
+  if(event?.evidence_id&&preview&&tracking?.observation?.detections?.length&&tracking.frames?.length>1&&stats.collectors_online===1)break;
   await new Promise(r=>setTimeout(r,1000));
  }
  assert.ok(event?.evidence_id,'Synthetic event clip was not persisted: '+JSON.stringify({stats,preview:!!preview,cameras:await(await call('/api/cameras')).json()})+' '+log);
  assert.ok(tracking?.observation?.detections[0]?.track_id,'Tracking transport missing');
  assert.equal(tracking.observation.frame_id,createHash('sha256').update(Buffer.from(tracking.jpeg,'base64')).digest('hex'));
+ assert.ok(tracking.frames.length>1,'Slow transport must deliver multiple actual frames per packet');
+ for(const f of tracking.frames)assert.equal(f.observation.frame_id,createHash('sha256').update(Buffer.from(f.jpeg,'base64')).digest('hex'));
  assert.ok(preview?.observation?.frame_id);assert.equal(stats.collectors_online,1);
  const r=await call('/api/evidence/'+event.evidence_id),bytes=Buffer.from(await r.arrayBuffer());
  assert.equal(bytes.subarray(4,8).toString(),'ftyp');
  const hash=createHash('sha256').update(bytes).digest('hex');assert.equal(r.headers.get('X-Content-SHA256'),hash);
  const range=await fetch(base+'/api/evidence/'+event.evidence_id,{headers:{Authorization:'Bearer '+token,Range:'bytes=4-7'}});assert.equal(range.status,206);assert.equal(await range.text(),'ftyp');
- console.log(JSON.stringify({synthetic_fixture:true,production_writes:false,collector_online:true,event_persisted:true,clip_bytes:bytes.length,clip_sha256:hash,range_playback:true,tracking_transport:true,tracking_id:tracking.observation.detections[0].track_id,preview_frame_id:preview.observation.frame_id,preview_model:preview.observation.model}));
+ console.log(JSON.stringify({synthetic_fixture:true,production_writes:false,collector_online:true,event_persisted:true,clip_bytes:bytes.length,clip_sha256:hash,range_playback:true,tracking_transport:true,tracking_batch_frames:tracking.frames.length,tracking_id:tracking.observation.detections[0].track_id,preview_frame_id:preview.observation.frame_id,preview_model:preview.observation.model}));
 }finally{
  try{process.kill(-child.pid,'SIGTERM');}catch{}
  await new Promise(r=>server.close(r));sql.close();

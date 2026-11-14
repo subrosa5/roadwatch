@@ -22,3 +22,9 @@ Hostrix recovery after pip ENOSPC
 This installer does not uninstall or modify global Python packages. Only the
 pinned headless OpenCV copy in this project is used by the app. The full target
 package set and actual disk footprint must be verified on this provider.
+
+Updating an already running instance: Upload this ZIP and Unzip with replacement.
+Do NOT use Redeploy: keep .rw-packages, data and existing environment secrets.
+Keep ROADWATCH_MODE=run and the same bootstrap command. This build uses 4 fps,
+36000 inference CPU seconds/day, and bounded tracking frame batches. Dependencies
+and model hashes are unchanged. Fresh/stale status is not accuracy validation.

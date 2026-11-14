@@ -190,7 +190,7 @@ try {
     fullPage: true,
   });
   await page.unroute('**/api/**');
-  let viewRequests=0, releasedViews=0, previewRequests=0, trackingRequests=0;
+  let viewRequests=0, releasedViews=0, previewRequests=0, trackingRequests=0, staleTracking=false;
   const previewObservation={camera_id:'iowa-cbtv51',frame_id:'qa-synthetic-frame',captured_at:new Date().toISOString(),model:'QA SYNTHETIC ANNOTATIONS',detections:[{label:'fire',score:.95,box:[.54,.27,.18,.34]}]};
   const jpeg=(await readFile('web/clips/fire.jpg')).toString('base64');
   await page.route('https://video2.iowadot.gov:8888/**',route=>route.abort());
@@ -200,7 +200,9 @@ try {
     if(p==='/api/cameras')return route.fulfill({json:[{id:'iowa-cbtv51',name:'QA · синтетический кадр аналитики',zone:'interstate29',enabled:true,approved:true,demo:false,health:'no_data',stream_url:'https://video2.iowadot.gov:8888/councilbluffs/cbtv51lb/playlist.m3u8',source_page:'https://iowadot.gov',collector:{online:true,state:'running',frames_analyzed:12}}]});
     if(p==='/api/stats')return route.fulfill({json:{collectors_online:1,receiving_real:0,daily_frames:1,daily_frame_limit:500,preview_quota:2,preview_daily_limit:6000}});
     if(p.endsWith('/view')){if(route.request().method()==='DELETE')releasedViews++;else viewRequests++;return route.fulfill({json:{active:true}});}
-    if(p.endsWith('/tracking')){trackingRequests++;return route.fulfill({json:{observation:{...previewObservation,frame_id:'qa-tracking-'+trackingRequests,model:'QA SYNTHETIC TRACKING',detections:[{label:'vehicle',score:.9,box:[.2,.4,.1,.1],track_id:'qa-7',tracking_method:'optical_flow'}]},jpeg,stale:false}});}
+    if(p.endsWith('/tracking')){trackingRequests++;
+      const frames=Array.from({length:3},(_,i)=>({observation:{...previewObservation,captured_at:new Date(Date.now()-(staleTracking?9000:1000)+(i*200)).toISOString(),frame_id:'qa-tracking-'+trackingRequests+'-'+i,model:'QA SYNTHETIC TRACKING',detections:[{label:'vehicle',score:.9,box:[.2+i*.01,.4,.1,.1],track_id:'qa-7',tracking_method:'optical_flow'}]},jpeg}));
+      return route.fulfill({json:{...frames.at(-1),frames,stale:staleTracking}});}
     if(p.endsWith('/preview')){previewRequests++;return route.fulfill({json:{observation:previewObservation,jpeg,stale:false}});}
     if(p==='/api/events'||p==='/api/sources')return route.fulfill({json:[]});
     return route.continue();
@@ -220,7 +222,14 @@ try {
   await page.screenshot({path:'docs/screenshots/analysis.png',fullPage:true});
   await page.locator('#mode-tracking').click();
   await page.waitForFunction(()=>document.getElementById('analysis-tags').textContent.includes('qa-7'));
+  const initialTrackingSrc=await page.locator('#camera-frame').getAttribute('src');
+  await page.waitForFunction(src=>document.getElementById('camera-frame').src!==src,initialTrackingSrc);
   await page.waitForTimeout(800);assert.ok(trackingRequests>=2);
+  staleTracking=true;
+  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('ОЖИДАЕМ НОВЫЕ'));
+  assert.equal(await page.locator('#video-unavailable').isHidden(),true,'a delayed matching image must stay visible');
+  staleTracking=false;
+  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('С ЗАДЕРЖКОЙ'));
   assert.equal(await page.locator('#camera-live').isHidden(),true);
   await page.locator('#mode-live').click();
   await page.waitForFunction(()=>getComputedStyle(document.getElementById('overlay')).display==='none');

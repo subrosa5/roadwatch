@@ -30,6 +30,12 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(api.session,'post',return_value=Response(429)):
             with self.assertRaises(PublicationQuotaError): api.post('/api/observations',json={})
 
+    def test_delayed_display_frame_does_not_kill_monitoring(self):
+        api=Api('https://example.chatgpt.site','a'*64,'b'*64)
+        for message in ['Tracking frame too old','Preview too old','Stale or future frame']:
+            with patch.object(api.session,'post',return_value=Response(400,{'error':message})):
+                with self.assertRaises(RetryableApiError):api.post('/api/cameras/iowa-cbtv51/tracking',json={})
+
     def test_outbox_survives_failed_upload_and_restart(self):
         class Offline:
             def post(self,*args,**kwargs): raise RetryableApiError('offline')

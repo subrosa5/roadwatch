@@ -5,7 +5,7 @@
   "fps": 5,
   "pre_seconds": 10,
   "post_seconds": 10,
-  "daily_inference_cpu_seconds": 21600,
+  "daily_inference_cpu_seconds": 36000,
   "heartbeat_seconds": 900,
   "daily_publication_limit": 400,
   "daily_clip_limit": 5,

@@ -128,7 +128,7 @@ class Api:
             if status in {401,403}: raise FatalApiError('API authorization or camera configuration rejected')
             if status in {429,507}: raise PublicationQuotaError('API quota reached')
             if status == 400:
-                try: stale=response.json().get('error')=='Stale or future frame'
+                try: stale=response.json().get('error') in {'Stale or future frame','Tracking frame too old','Preview too old'}
                 except ValueError: stale=False
                 if stale: raise RetryableApiError('Observation expired during network outage')
             if status in {408,409,425} or status >= 500:
@@ -229,6 +229,8 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     last_hash = None
     last_incident=-float('inf')
     tracker=VehicleTracker(VehicleDetector(settings['vehicle_model']),detect_interval=settings.get('vehicle_detection_interval_seconds',.5)) if settings.get('vehicle_model') else None
+    state['tracking_buffer']=deque(maxlen=16)
+    state['tracking_latest']=None
     clips = set()
     try:
         while process.returncode is None:
@@ -277,6 +279,7 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
             data = {"camera_id": camera["id"], "frame_id": frame_hash, "captured_at": captured_at, "detections": detections, "model": settings["model_version"], "clock": "collector_arrival"}
             if tracker:
                 state['tracking_latest']=({**data,'detections':tracks,'model':settings.get('vehicle_model_version','opencv-nanodet-2022nov+LK-v1')},jpeg)
+                state['tracking_buffer'].append(state['tracking_latest'])
             if not do_incident:continue
             state['latest'] = (data,jpeg)
             try:
@@ -350,7 +353,7 @@ async def main(config_path):
                     await asyncio.to_thread(api.post,'/api/ops/maintenance',json={})
                     next_cleanup=time.monotonic()+3600
             except (RetryableApiError,PublicationQuotaError): state['last_error']='network'
-            last_sent=time.monotonic();last_state=state["state"]
+            last_sent=time.monotonic();last_state=payload['state']
             await asyncio.sleep(1)
     async def previews(camera):
         state=states[camera['id']]
@@ -361,7 +364,9 @@ async def main(config_path):
                 demand=await asyncio.to_thread(api.get,'/api/cameras/'+camera['id']+'/demand')
                 state['view_active']=demand.get('active',False)
                 state['view_kind']=demand.get('kind','analysis')
-                if state['view_active'] and state.get('view_kind')=='analysis' and state['latest'] and quota_day!=today:
+                state['view_kinds']=demand.get('kinds',[state['view_kind']])
+                state['tracking_format']=demand.get('tracking_format')
+                if state['view_active'] and 'analysis' in state.get('view_kinds',[state.get('view_kind')]) and state['latest'] and quota_day!=today:
                     data,jpeg=state['latest']
                     if data['frame_id']!=sent:
                         import base64
@@ -371,18 +376,23 @@ async def main(config_path):
             except RetryableApiError: pass
             await asyncio.sleep(5)
     async def tracking_previews(camera):
-        state=states[camera['id']];sent=None;quota_day=None
+        state=states[camera['id']];sent_at='';quota_day=None
         while True:
             today=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
-            if state.get('view_active') and state.get('view_kind')=='tracking' and state.get('tracking_latest') and quota_day!=today:
-                data,jpeg=state['tracking_latest']
-                if data['frame_id']!=sent:
+            if state.get('view_active') and 'tracking' in state.get('view_kinds',[state.get('view_kind')]) and state.get('tracking_latest') and quota_day!=today:
+                pending=[item for item in state.get('tracking_buffer',[]) if item[0]['captured_at']>sent_at][-8:]
+                if pending:
                     try:
                         import base64
-                        await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/tracking',json={'observation':data,'jpeg':base64.b64encode(jpeg).decode()})
-                        sent=data['frame_id']
+                        frames=[{'observation':data,'jpeg':base64.b64encode(jpeg).decode()} for data,jpeg in pending]
+                        if state.get('tracking_format')=='batch-v1':
+                            while len(frames)>1 and len(json.dumps({'frames':frames}))>800000:frames.pop(0)
+                            payload={'frames':frames}
+                        else:payload=frames[-1]
+                        result=await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/tracking',json=payload)
+                        if result.get('stored'):sent_at=frames[-1]['observation']['captured_at']
                     except PublicationQuotaError:quota_day=today
-                    except RetryableApiError:pass
+                    except RetryableApiError:state['last_error']='network'
             await asyncio.sleep(.2)
     async def uploads():
         while True:
