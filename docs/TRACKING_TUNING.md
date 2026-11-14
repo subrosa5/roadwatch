@@ -42,3 +42,12 @@ python tools/compare-tracking.py --video sample.mp4 --model vehicles.onnx \
 На бесплатном 0.5 CPU цель — 4 fps, не плавность 25–30 fps. Отдельная квота 24000 кадров просмотра в сутки даёт примерно 100 минут просмотра при полных 4 fps; фоновые fire/smoke, трекинг и обработка событий продолжаются независимо от вкладки. Ни это исправление, ни скриншоты не подтверждают accuracy ДТП или безотказность 24/7.
 
 Скриншоты README сняты с реального опубликованного фронта и работающего Hostrix. Они подтверждают наличие изображения и согласованных рамок в этот момент, а не полноту детектора или применение нового пакета на сервере.
+
+
+## Облачный допуск нового collector
+
+[Реальный Iowa load test](https://github.com/subrosa5/roadwatch/actions/runs/43606129945), commit 7c13051: success. Linux x86_64, Docker 0.5 CPU / 512 МиБ, настоящие модели и HLS, JPEG q=3, цель 4 fps. 81 кадр за 20.44 с = **3.963 fps**, max frame age 0.115 с, stale_frames=0, 259 track observations. Inference CPU 3.19 с за тест, RSS upper sum 358.27 МиБ; resource/throughput gates passed. Private API writes=false. Это проверка ресурса нового профиля, не измерение 24 часов работы на Hostrix.
+
+[Полный CI](https://github.com/subrosa5/roadwatch/actions/runs/43606127079): success, 43 Node + 23 Python test, collector→Worker E2E с задержкой сети, JPEG/hash/MP4/Range. Дополнительно тест границы пакетов гарантирует 16 исходных кадров с интервалом 250 мс при доставке двумя пакетами раз в 2 с; финальный набор — 44 Node tests.
+
+Recovery ZIP: 32698 байт, SHA-256 c87f0c1355b68963bb8e08ded33377ac427390351950449e641a926f7b67cdf3. Файл на рабочем столе заменён по тому же имени; старые варианты не добавляются.
