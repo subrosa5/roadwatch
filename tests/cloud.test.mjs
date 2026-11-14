@@ -346,6 +346,10 @@ test('collector activity is independent of archived frame freshness and expires 
  assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',data,true)).status,403);
  assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',data)).status,200);
  const stats=await (await s.call('/api/stats')).json();assert.equal(stats.monitoring,true);assert.equal(stats.receiving_real,0);assert.equal(stats.collectors_online,1);assert.equal(stats.daily_frames,0);
+ await s.post('/api/cameras/iowa-cbtv51/heartbeat',{...data,last_frame_at:new Date(Date.now()-45000).toISOString()});
+ assert.equal((await(await s.call('/api/stats')).json()).monitoring,true,'minute telemetry must not appear offline between heartbeats');
+ await s.post('/api/cameras/iowa-cbtv51/heartbeat',{...data,last_frame_at:new Date(Date.now()-91000).toISOString()});
+ assert.equal((await(await s.call('/api/stats')).json()).monitoring,false,'a stalled stream must expire');
  s.sql.prepare("UPDATE rw_probes SET checked_at=? WHERE source_id='collector:iowa-cbtv51'").run(new Date(Date.now()-181000).toISOString());
  assert.equal((await (await s.call('/api/stats')).json()).monitoring,false);
  assert.equal((await s.post('/api/cameras/iowa-cbtv51/heartbeat',{...data,last_frame_at:'invalid'})).status,400);

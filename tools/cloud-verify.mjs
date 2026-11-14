@@ -151,8 +151,15 @@ if(input.operation==='tracking-probe') {
       await page.waitForFunction(()=>{const im=document.getElementById('camera-frame');return im.complete&&im.naturalWidth>0&&document.getElementById('video-unavailable').hidden;},null,{timeout:35000});
       const first=await page.locator('#camera-frame').getAttribute('src');
       await page.waitForFunction(src=>document.getElementById('camera-frame').src!==src,first,{timeout:15000});
-      const waitUntil=Date.now()+12000;
-      while(Date.now()<waitUntil&&!trackingSamples.some(s=>s.detections.length))await page.waitForTimeout(1000);
+      let visibleTracking='';
+      const until=Date.now()+45000;
+      while(Date.now()<until){
+        const label=await page.locator('#analysis-tags').textContent();
+        if(label.includes('vehicle #')){visibleTracking=label;break;}
+        await page.waitForTimeout(500);
+      }
+      console.log(JSON.stringify({fresh_track_samples:trackingSamples.filter(s=>!s.stale&&s.detections.length).length,ui_tracks_seen:!!visibleTracking,last_label:await page.locator('#analysis-tags').textContent()}));
+      await page.screenshot({path:'docs/screenshots/hostrix-tracking.png',fullPage:true});
       if(await page.locator('#overlay').isHidden())throw Error('Tracking overlay hidden');
       if(!(await page.locator('#camera-live').isHidden()))throw Error('Tracking mixed with unmatched HLS');
       const ids=new Set(trackingSamples.map(s=>s.frame_id));
@@ -161,8 +168,7 @@ if(input.operation==='tracking-probe') {
       if(errors.length)throw Error('UI errors: '+errors.join(', '));
       if(!stats.monitoring)throw Error('Collector no longer online');
       if(ids.size<2||trackingSamples.at(-1)?.stale)throw Error('Tracking frames not advancing');
-      await page.screenshot({path:'docs/screenshots/hostrix-tracking.png',fullPage:true});
-      console.log(JSON.stringify({production_tracking_verified:true,synthetic_data:false,collectors_online:stats.collectors_online,real_frame_ids:ids.size,samples:trackingSamples.length,max_visible_tracks:Math.max(0,...trackingSamples.map(s=>s.detections.length)),unique_track_ids:trackIds.size,model:trackingSamples.at(-1)?.model,latest_captured_at:trackingSamples.at(-1)?.captured_at,overlay_visible:true,matching_frame_mode:true,uncaught_errors:errors.length}));
+      console.log(JSON.stringify({production_tracking_verified:true,synthetic_data:false,collectors_online:stats.collectors_online,real_frame_ids:ids.size,samples:trackingSamples.length,max_visible_tracks:Math.max(0,...trackingSamples.map(s=>s.detections.length)),unique_track_ids:trackIds.size,model:trackingSamples.at(-1)?.model,latest_captured_at:trackingSamples.at(-1)?.captured_at,overlay_visible:true,matching_frame_mode:true,visible_tracking:visibleTracking,uncaught_errors:errors.length}));
     } else if (input.operation === "live") {
       await post("/api/ops/init", {});
       await page.goto(origin.href);

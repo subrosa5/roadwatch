@@ -26,7 +26,8 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
   async function health(id) {
     const h=await read('collector:'+id);if(!h)return {online:false,state:'not_started',last_frame_at:null};
     const heartbeat_fresh=Date.now()-Date.parse(h.received_at)<180000;
-    const frame_fresh=h.last_frame_at && Date.now()-Date.parse(h.last_frame_at)<20000;
+    // Telemetry arrives once per minute; display freshness is checked separately.
+    const frame_fresh=h.last_frame_at && Date.now()-Date.parse(h.last_frame_at)<90000;
     return {...h,heartbeat_fresh,frame_fresh:!!frame_fresh,online:!!(heartbeat_fresh&&frame_fresh&&h.state==='running')};
   }
   async function viewing(id,request,auth) {
