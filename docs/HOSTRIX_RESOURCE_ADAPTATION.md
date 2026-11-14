@@ -17,3 +17,12 @@ Optical flow собирает точки отдельно внутри ROI ка�
 ## Применение
 
 Stop → загрузить roadwatch-hostrix-fix.zip → Unzip с заменой → Start. Не применять Redeploy; существующие модели, зависимости и ключи сохраняются. Команда остаётся python3 -u hostrix_bootstrap.py --repair, ROADWATCH_MODE=run. На время проверки auto-restart выключен. Если хост не обеспечивает даже минимальную частоту, это ограничение остаётся видимым в логах.
+
+
+## Проверка и публикация
+
+Commit d53bab9: [полный CI](https://github.com/subrosa5/roadwatch/actions/runs/43618171789) и [реальный Linux load test](https://github.com/subrosa5/roadwatch/actions/runs/43618175080) — success. 44 Node + 28 Python tests и collector→Worker E2E. В контейнере 0.5 CPU / 512 МиБ: profile_version=3, selected_fps=4, 80 кадров за 20.43 с = 3.916 fps, stale_frames=0, max frame age 0.020 с, 300 track observations; inference CPU 3.01 с, RSS upper sum 355.11 МиБ. Private API writes=false. Это подтверждает работу нового профиля на GitHub, не заменяет проверку на аккаунте Hostrix.
+
+Sites source c74614cb08f9f6399e8d29b54edf414a5b355131, deployment appgdep_6af892d39de481919f9af4d0ed21edad: succeeded, owner-private. Опубликованный ZIP сверен по SHA-256: 33555 байт, 71d308615e0dbc72a94b14c7dedb0d5363dbbcb7197fc57b030ce9fd90fe7b5c.
+
+Чтобы различать локальные архивы, на рабочем столе оставлен только roadwatch-hostrix-v3.zip; прежний roadwatch-hostrix-fix.zip переименован. На сайте постоянный URL downloads/roadwatch-hostrix-fix.zip отдаёт те же байты новой v3. Существующие модели и зависимости не переустанавливаются. Применение v3 на Hostrix ещё требует Upload/Unzip владельцем; сам факт публикации не означает работающий мониторинг.

@@ -23,3 +23,6 @@
 
 
 При sustained_resource_budget_exceeded использовать актуальный ZIP с profile_version=3. Он выполняет общий optical flow для всех объектов и выбирает частоту по фактическим измерениям. В логах должны появиться configuration_loaded (profile_version=3), selected_fps и throughput_gate_passed=true. Во время проверки автоматический restart выключен. Измерение реального потока может пройти до трёх попыток с более низкой частотой; при превышении памяти или отсутствии потока дальнейших попыток нет.
+
+
+Актуальный файл на рабочем столе: roadwatch-hostrix-v3.zip. В Files распаковать именно его с заменой корневых main.py, vehicles.py и config.json. В новом логе должен быть configuration_loaded/profile_version=3. Это позволяет отличить настоящий новый запуск от повторного запуска прежних файлов.
