@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY collector/hostrix/hostrix_bootstrap.py ./
+COPY collector/hostrix/requirements.lock ./hostrix-requirements.lock
+RUN python3 -u hostrix_bootstrap.py --install-only && python3 -u hostrix_bootstrap.py --install-only
+RUN python3 -c "from pathlib import Path; n=sum(p.stat().st_size for p in Path('.rw-packages').rglob('*') if p.is_file()); assert n<600*1024**2, 'Dependency footprint exceeds test budget'; print('Disk footprint below 600 MiB; models and recordings not included')"

@@ -1,0 +1,24 @@
+Hostrix recovery after pip ENOSPC
+
+1. Stop the server; disable automatic restart during preflight.
+2. Upload and extract this archive, replacing project files only.
+3. Startup: Python 3.12; uncheck "Install packages first (requirements.txt)".
+4. Set Startup command to: python3 -u hostrix_bootstrap.py --repair
+   Save command. If using Files to run instead, select ONLY hostrix_bootstrap.py.
+5. Keep ROADWATCH_MODE=preflight. No private API secrets needed for this check.
+6. Start once. The bootstrap reports disk information, purges only the current
+   runtime account's pip cache, then installs exact binary wheels one at a time
+   into .rw-packages. Downloads use .rw-install-tmp instead of system /tmp.
+7. Look for dependencies_ready, isolated_imports_verified, and the model preflight
+   report. If Hostrix STILL prints "Installing requirements" before our stage
+   disk_diagnostics, its automatic installer is still active. Stop and recheck
+   the Startup checkbox and command; repeated attempts will not fix disk limits.
+8. Send the log if ENOSPC persists: project quota, /tmp, inode limits or the
+   provider's underlying filesystem may be full. No paid upgrade is needed to
+   diagnose that distinction. Do not delete system directories or model data.
+9. After successful preflight, actual monitoring still needs the two private
+   runtime secrets and ROADWATCH_MODE=run. Original privacy rules still apply.
+
+This installer does not uninstall or modify global Python packages. Only the
+pinned headless OpenCV copy in this project is used by the app. The full target
+package set and actual disk footprint must be verified on this provider.

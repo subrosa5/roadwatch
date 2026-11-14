@@ -1,0 +1,18 @@
+name: Hostrix dependency recovery check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hostrix-install-check
+  cancel-in-progress: true
+jobs:
+  linux-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build recovery archive
+        run: python3 tools/build-hostrix.py /tmp/roadwatch-hostrix-fix.zip
+      - name: Install exact wheels in clean Python 3.12 and verify imports and restart
+        run: docker build --progress=plain -f collector/hostrix/Dockerfile.install-check -t roadwatch-hostrix-check .
