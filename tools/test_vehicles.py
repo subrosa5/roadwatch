@@ -3,6 +3,7 @@ from pathlib import Path
 import sys,unittest
 import numpy as np
 import cv2
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from collector.vehicles import VehicleTracker,VehicleDetector
 
@@ -46,4 +47,24 @@ class Tests(unittest.TestCase):
             def infer(self,image):return np.array([[50,50,100,100,.5,2],[51,51,101,101,.4,7],[200,200,230,230,.3,2]])
         d.net=Net();out=d.detect(np.zeros((416,416,3),np.uint8))
         self.assertEqual(len(out),2);self.assertEqual(out[0]['score'],.5)
+    def test_shared_flow_preserves_independent_motion_and_cost_does_not_repeat_pyramids(self):
+        boxes=[[.1,.2,.15,.15],[.4,.2,.15,.15],[.7,.2,.15,.15]]
+        class Detector:
+            def detect(self,image):return [{'label':'vehicle','score':.9,'box':b} for b in boxes]
+        t=VehicleTracker(Detector());rng=np.random.default_rng(7)
+        textures=[rng.integers(0,255,(60,60,3),dtype=np.uint8) for _ in boxes]
+        def image(offsets):
+            f=np.zeros((400,400,3),np.uint8)
+            for b,texture,(dx,dy) in zip(boxes,textures,offsets):
+                x,y=int(b[0]*400)+dx,int(b[1]*400)+dy;f[y:y+60,x:x+60]=texture
+            return f
+        first=t.update(image([(0,0)]*3),0)
+        with patch('cv2.calcOpticalFlowPyrLK',wraps=cv2.calcOpticalFlowPyrLK) as flow:
+            second=t.update(image([(2,0),(0,3),(-2,1)]),.2)
+        self.assertEqual(flow.call_count,2,'all objects share one forward/backward calculation')
+        self.assertEqual([d['track_id'] for d in first],[d['track_id'] for d in second])
+        for before,after,(dx,dy) in zip(first,second,[(2,0),(0,3),(-2,1)]):
+            self.assertEqual(after['tracking_method'],'optical_flow')
+            self.assertAlmostEqual(after['box'][0]-before['box'][0],dx/400,places=3)
+            self.assertAlmostEqual(after['box'][1]-before['box'][1],dy/400,places=3)
 if __name__=='__main__':unittest.main(verbosity=2)

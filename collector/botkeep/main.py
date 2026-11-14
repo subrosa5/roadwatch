@@ -70,17 +70,24 @@ def tracking_profile(detector_cpu_ms, flow_cpu_ms, fire_cpu_ms, fps, memory_mib)
     warm_detector=detector_cpu_ms[2:] if len(detector_cpu_ms)>2 else detector_cpu_ms
     detector_ms=statistics.median(warm_detector)
     flow_ms=statistics.median(flow_cpu_ms) if flow_cpu_ms else 0.
-    other_cpu=fps*flow_ms/1000+fire_cpu_ms/5000
-    available=.35-other_cpu
-    interval=max(.5,detector_ms/1000/available) if available>0 else float('inf')
-    # Never dilute new-object detection below once a second just to pass a gate.
-    accepted=interval<=1 and memory_mib<350
-    configured=min(1.,math.ceil(interval*1000)/1000) if math.isfinite(interval) else 1.
+    requested=float(fps);selected=requested
+    candidates=sorted({requested,*[float(n) for n in (4,3,2) if 2<=n<=requested]},reverse=True)
+    configured=1.;estimate=float('inf');fits=False
+    for selected in candidates:
+        other_cpu=selected*flow_ms/1000+fire_cpu_ms/5000
+        available=.35-other_cpu
+        interval=max(.5,detector_ms/1000/available) if available>0 else float('inf')
+        configured=min(1.,math.ceil(interval*1000)/1000) if math.isfinite(interval) else 1.
+        estimate=other_cpu+detector_ms/1000/configured
+        fits=interval<=1 and estimate<=.350001
+        if fits:break
     return {'vehicle_detector_warm_samples':len(warm_detector),'vehicle_detector_cpu_ms_median':detector_ms,'vehicle_flow_cpu_ms_median':flow_ms,
             'vehicle_detection_interval_seconds':round(configured,3),
-            'estimated_inference_cpu_per_second':round(other_cpu+detector_ms/1000/configured,4),
-            'resource_gate_passed':accepted,
-            'failure_reasons':([] if interval<=1 else ['sustained_inference_budget_exceeded'])+([] if memory_mib<350 else ['preflight_memory_budget_exceeded'])}
+            'requested_fps':requested,'selected_fps':selected,'fps_adapted':selected<requested,
+            'estimated_inference_cpu_per_second':round(estimate,4),
+            'resource_gate_passed':fits and memory_mib<350,
+            'failure_reasons':([] if fits else ['sustained_inference_budget_exceeded'])+([] if memory_mib<350 else ['preflight_memory_budget_exceeded'])}
+
 
 
 def preflight(config, model):
@@ -91,9 +98,11 @@ def preflight(config, model):
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-rw_timeout", "10000000",
                "-threads", "1", "-i", source, "-frames:v", "1", "-vf", "scale='min(640,iw)':-2",
                "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"]
+    print(json.dumps({"stage":"camera_frame_preflight","timeout_seconds":40}),flush=True)
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40)
     if result.returncode or not result.stdout or len(result.stdout) > 2 * 1024 * 1024:
         raise RuntimeError("FFmpeg failed to obtain a camera JPEG")
+    print(json.dumps({"stage":"fire_model_preflight"}),flush=True)
     detector = Detector([model])
     samples = []
     detections = []
@@ -102,6 +111,7 @@ def preflight(config, model):
         detections = detector.infer(result.stdout)
         samples.append((time.process_time() - start) * 1000)
     from vehicles import VehicleDetector, VehicleTracker
+    print(json.dumps({'stage':'vehicle_model_preflight'}),flush=True)
     vehicle=VehicleDetector(config['vehicle_model'])
     vehicle_samples=[];vehicle_wall_samples=[];detector_samples=[];flow_samples=[];vehicle_detections=[]
     import numpy as np
@@ -130,7 +140,7 @@ def preflight(config, model):
             "monitoring_started": False}
 
 
-def tracking_load(config,model):
+def tracking_load(config,model,*,enforce=True):
     """Bounded real-stream throughput test, no private API or synthetic detections."""
     from collector import recording_command
     from vehicles import VehicleDetector,VehicleTracker
@@ -166,7 +176,22 @@ def tracking_load(config,model):
     except (OSError,ValueError):pass
     result={'cgroup_memory_peak_mib':cgroup_peak,'real_stream_tracking_load':True,'duration_seconds':duration,'frames':frames,'processed_fps':rate,'target_fps':config.get('fps',5),'max_frame_age_seconds':max_age,'stale_frames':stale_frames,'vehicle_detection_interval_seconds':config.get('vehicle_detection_interval_seconds',.5),'track_observations':tracked,'inference_cpu_seconds':time.process_time()-cpu,'rss_upper_estimate_mib':rss_mb()+rss_mb(resource.RUSAGE_CHILDREN),'private_api_writes':False,'throughput_gate_passed':rate>=.8*config.get('fps',5) and stale_frames<=.05*max(1,frames) and rss_mb()+rss_mb(resource.RUSAGE_CHILDREN)<384 and (cgroup_peak is None or cgroup_peak<448)}
     print(json.dumps(result),flush=True)
-    if not result['throughput_gate_passed']:raise RuntimeError('Real tracking throughput gate did not pass')
+    if enforce and not result['throughput_gate_passed']:raise RuntimeError('Real tracking throughput gate did not pass')
+    return result
+
+
+def admit_tracking_stream(config,model):
+    requested=float(config['fps'])
+    candidates=sorted({requested,*[float(n) for n in (4,3,2) if n<requested]},reverse=True)
+    for attempt,fps in enumerate(candidates,1):
+        config['fps']=fps
+        print(json.dumps({'stage':'real_stream_load_preflight','selected_fps':fps,'attempt':attempt,'max_attempts':len(candidates),'test_seconds':20}),flush=True)
+        result=tracking_load(config,model,enforce=False)
+        if result['throughput_gate_passed']:return result
+        # Lower cadence cannot repair missing input or admit excess memory.
+        peak=result.get('cgroup_memory_peak_mib')
+        if not result['frames'] or result['rss_upper_estimate_mib']>=384 or (peak is not None and peak>=448):break
+    raise RuntimeError('Real tracking throughput gate did not pass')
 
 
 def main():
@@ -175,6 +200,7 @@ def main():
     mode = os.environ.get("ROADWATCH_MODE", "preflight")
     if mode not in {"preflight", "run"}: raise ValueError("ROADWATCH_MODE must be preflight or run")
     config = json.loads((ROOT / "config.json").read_text())
+    print(json.dumps({"stage":"configuration_loaded","profile_version":3,"requested_fps":config.get("fps"),"tracking_model":config.get("vehicle_model_version")}),flush=True)
     lock = json.loads((ROOT / "model.lock.json").read_text())
     model_path = ROOT / "data/models/fire-smoke.onnx"
     PHASE = "model_download"
@@ -192,8 +218,9 @@ def main():
     if not report["resource_gate_passed"]:
         raise RuntimeError("Resource gate did not pass")
     config['vehicle_detection_interval_seconds']=report['vehicle_detection_interval_seconds']
+    config['fps']=report['selected_fps']
     PHASE='tracking_throughput_preflight'
-    tracking_load(config,model)
+    admit_tracking_stream(config,model)
     if mode == "preflight": return
     PHASE = "runtime_configuration"
     if not report["camera_network_test"]:

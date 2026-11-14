@@ -49,21 +49,39 @@ class VehicleTracker:
         gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY);h,w=gray.shape
         if self.previous is not None and self.previous.shape!=gray.shape:self.reset()
         if self.previous is not None:
-            alive=[];lost=[]
+            alive=[];lost=[];groups=[];corners=[];offset=0
             for t in self.tracks:
-                x,y,bw,bh=t['box'];mask=np.zeros_like(gray);mask[int(y*h):int((y+bh)*h),int(x*w):int((x+bw)*w)]=255
-                points=cv2.goodFeaturesToTrack(self.previous,maxCorners=20,qualityLevel=.01,minDistance=2,mask=mask)
+                x,y,bw,bh=t['box']
+                x1,y1=max(0,int(x*w)),max(0,int(y*h));x2,y2=min(w,int((x+bw)*w)),min(h,int((y+bh)*h))
+                if x2-x1<3 or y2-y1<3:
+                    lost.append(t);continue
+                # Detect features only inside this object, not the whole image.
+                points=cv2.goodFeaturesToTrack(self.previous[y1:y2,x1:x2],maxCorners=20,qualityLevel=.01,minDistance=2)
                 if points is None or len(points)<3:
                     lost.append(t);continue
+                points+=np.array([x1,y1],dtype=np.float32)
+                groups.append((t,offset,len(points)));corners.append(points);offset+=len(points)
+            if corners:
+                points=np.concatenate(corners,axis=0)
+                # One shared forward/backward pyramid for all objects.
                 moved,status,_=cv2.calcOpticalFlowPyrLK(self.previous,gray,points,None,winSize=(15,15),maxLevel=2)
-                back,good,_=cv2.calcOpticalFlowPyrLK(gray,self.previous,moved,None,winSize=(15,15),maxLevel=2)
-                valid=(status.reshape(-1)>0)&(good.reshape(-1)>0)&(np.linalg.norm((back-points).reshape(-1,2),axis=1)<1.5)
-                if valid.sum()<3:
-                    lost.append(t);continue
-                dx,dy=np.median((moved-points).reshape(-1,2)[valid],axis=0)/[w,h]
-                nx,ny=float(np.clip(x+dx,0,1-bw)),float(np.clip(y+dy,0,1-bh))
-                t={**t,'box':[nx,ny,bw,bh],'tracking_method':'optical_flow'}
-                if timestamp-t['detected_at']<=self.max_gap:alive.append(t)
+                back=good=None
+                if moved is not None and status is not None:
+                    finite=np.isfinite(moved).all(axis=(1,2))
+                    moved=np.where(np.isfinite(moved),moved,points)
+                    back,good,_=cv2.calcOpticalFlowPyrLK(gray,self.previous,moved,None,winSize=(15,15),maxLevel=2)
+                valid=np.zeros(len(points),dtype=bool)
+                if back is not None and good is not None:
+                    valid=finite&(status.reshape(-1)>0)&(good.reshape(-1)>0)&(np.linalg.norm((back-points).reshape(-1,2),axis=1)<1.5)
+                for t,start,count in groups:
+                    selected=valid[start:start+count]
+                    if selected.sum()<3:
+                        lost.append(t);continue
+                    delta=(moved[start:start+count]-points[start:start+count]).reshape(-1,2)[selected]
+                    dx,dy=np.median(delta,axis=0)/[w,h]
+                    x,y,bw,bh=t['box']
+                    nx,ny=float(np.clip(x+dx,0,1-bw)),float(np.clip(y+dy,0,1-bh))
+                    if timestamp-t['detected_at']<=self.max_gap:alive.append({**t,'box':[nx,ny,bw,bh],'tracking_method':'optical_flow'})
             self.lost=[t for t in self.lost+lost if timestamp-t['detected_at']<=self.max_gap]
             self.tracks=alive
         if timestamp-self.last_detect>=self.interval:

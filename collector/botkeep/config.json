@@ -20,5 +20,5 @@
     }
   ],
   "incident_interval_seconds": 5,
-  "vehicle_model_version": "opencv-nanodet-2022nov+LK-v2"
+  "vehicle_model_version": "opencv-nanodet-2022nov+LK-v3"
 }

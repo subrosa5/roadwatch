@@ -25,6 +25,8 @@ package set and actual disk footprint must be verified on this provider.
 
 Updating an already running instance: Upload this ZIP and Unzip with replacement.
 Do NOT use Redeploy: keep .rw-packages, data and existing environment secrets.
-Keep ROADWATCH_MODE=run and the same bootstrap command. This build uses 4 fps,
-36000 inference CPU seconds/day, and bounded tracking frame batches. Dependencies
+Keep ROADWATCH_MODE=run and the same bootstrap command. This build requests up to 4 fps; preflight selects 2-4 fps from measured load,
+36000 inference CPU seconds/day, and bounded tracking frame batches. All objects
+share a forward/backward optical-flow calculation. Real-stream admission may retry
+a lower cadence at most twice; memory and freshness limits remain enforced. Dependencies
 and model hashes are unchanged. Fresh/stale status is not accuracy validation.
