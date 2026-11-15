@@ -88,7 +88,9 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     if(!Array.isArray(items)||items.length<1||items.length>12)fail('Invalid tracking batch');
     let frames=[];let previous=-Infinity;
     for(const item of items){
-      const o=observation(item.observation),timestamp=Date.parse(o.captured_at);
+      // Validate old buffered pairs too; freshness belongs to the packet's
+      // newest frame below. An idle camera can leave a prefix older than 60s.
+      const o=observation(item.observation,Date.now(),{maxAgeMs:Infinity}),timestamp=Date.parse(o.captured_at);
       if(o.camera_id!==id||o.detections.some(d=>d.label!=='vehicle'))fail('Invalid tracking camera or labels');
       if(timestamp<=previous)fail('Tracking frames must be chronological');previous=timestamp;
       let bytes;try{if(typeof item.jpeg!=='string'||item.jpeg.length>350000)throw Error();bytes=Uint8Array.from(atob(item.jpeg),c=>c.charCodeAt(0));}catch{fail('Invalid tracking JPEG');}

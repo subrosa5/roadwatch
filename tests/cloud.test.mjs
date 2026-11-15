@@ -469,7 +469,11 @@ test('delayed tracking packet discards old prefix and stores its fresh matching 
  await s.post(path+'/view',{kind:'tracking'},true);
  const time=Date.now()-250;
  async function frame(i,at){const b=Buffer.from([255,216,255,i]);return {observation:{...obs(Buffer.from(await crypto.subtle.digest('SHA-256',b)).toString('hex'),at),camera_id:'iowa-cbtv51',demo:false,detections:[]},jpeg:b.toString('base64')};}
- const old=await frame(80,time-6000),latest=await frame(81,time);
+ const old=await frame(80,time-120000),latest=await frame(81,time);
+ const malformed={...old,observation:{...old.observation,frame_id:'wrong-hash'}};
+ assert.equal((await s.post(path+'/tracking',{frames:[malformed,latest]})).status,400,'discarded prefix must still pass pair validation');
+ const future=await frame(83,time+15000);
+ assert.equal((await s.post(path+'/tracking',{frames:[latest,future]})).status,400,'future timestamps remain forbidden');
  const result=await s.post(path+'/tracking',{frames:[old,latest]});assert.equal(result.status,200);
  const data=await(await s.call(path+'/tracking')).json();assert.equal(data.stale,false);assert.equal(data.frames.length,1);assert.equal(data.observation.frame_id,latest.observation.frame_id);
  assert.equal((await(await s.call('/api/stats')).json()).tracking_quota,1);

@@ -13,7 +13,7 @@ export class InputError extends Error {
     this.status = status;
   }
 }
-export function observation(input, now = Date.now()) {
+export function observation(input, now = Date.now(), { maxAgeMs = LIMITS.maxAgeMs } = {}) {
   if (!input || typeof input !== "object")
     throw new InputError("Observation required");
   if (
@@ -30,7 +30,7 @@ export function observation(input, now = Date.now()) {
   if (
     !Number.isFinite(time) ||
     time > now + LIMITS.futureSkewMs ||
-    time < now - LIMITS.maxAgeMs
+    time < now - maxAgeMs
   )
     throw new InputError("Stale or future frame");
   if (!Array.isArray(input.detections) || input.detections.length > 100)
