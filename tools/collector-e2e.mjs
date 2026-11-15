@@ -40,22 +40,36 @@ try{
   stats=await(await call('/api/stats')).json();
   const r=await call('/api/cameras/iowa-cbtv51/preview');if(r.ok)preview=await r.json();
   if(preview&&!switched){await call('/api/cameras/iowa-cbtv51/view','POST',{kind:'tracking'});switched=true;}
-  const tr=await call('/api/cameras/iowa-cbtv51/tracking');if(tr.ok)tracking=await tr.json();
-  if(event?.evidence_id&&preview&&tracking?.observation?.detections?.length&&tracking.frames?.length>1&&stats.collectors_online===1)break;
+  const tr=await call('/api/cameras/iowa-cbtv51/watch');if(tr.ok)tracking=await tr.json();
+  if(event?.evidence_id&&preview&&tracking?.segments?.length>=3&&tracking.segments.some(s=>s.observations.some(o=>o.detections.length))&&stats.collectors_online===1)break;
   await new Promise(r=>setTimeout(r,1000));
  }
  assert.ok(event?.evidence_id,'Synthetic event clip was not persisted: '+JSON.stringify({stats,preview:!!preview,cameras:await(await call('/api/cameras')).json()})+' '+log);
- assert.ok(tracking?.observation?.detections[0]?.track_id,'Tracking transport missing');
- assert.equal(tracking.observation.frame_id,createHash('sha256').update(Buffer.from(tracking.jpeg,'base64')).digest('hex'));
- assert.ok(largestPostedTrackingBatch>1,'Collector must batch actual frames');
- assert.ok(tracking.frames.length>1,'Slow transport must deliver multiple actual frames per packet');
- for(const f of tracking.frames)assert.equal(f.observation.frame_id,createHash('sha256').update(Buffer.from(f.jpeg,'base64')).digest('hex'));
+ assert.ok(tracking?.segments?.flatMap(s=>s.observations).some(o=>o.detections[0]?.track_id),'Video tracking transport missing: '+log);
+ const manifest=await(await call('/api/cameras/iowa-cbtv51/watch/playlist.m3u8')).text();assert.ok(manifest.includes('#EXT-X-PROGRAM-DATE-TIME'));
+ for(const s of tracking.segments){const bytes=Buffer.from(await(await call('/api/cameras/iowa-cbtv51/watch/'+s.hash+'.ts')).arrayBuffer());assert.equal(createHash('sha256').update(bytes).digest('hex'),s.hash);assert.ok(s.observations.every(o=>o.media_time>=s.start-1&&o.media_time<=s.end+1));}
  assert.ok(preview?.observation?.frame_id);assert.equal(stats.collectors_online,1);
  const r=await call('/api/evidence/'+event.evidence_id),bytes=Buffer.from(await r.arrayBuffer());
  assert.equal(bytes.subarray(4,8).toString(),'ftyp');
  const hash=createHash('sha256').update(bytes).digest('hex');assert.equal(r.headers.get('X-Content-SHA256'),hash);
  const range=await fetch(base+'/api/evidence/'+event.evidence_id,{headers:{Authorization:'Bearer '+token,Range:'bytes=4-7'}});assert.equal(range.status,206);assert.equal(await range.text(),'ftyp');
- console.log(JSON.stringify({synthetic_fixture:true,production_writes:false,collector_online:true,event_persisted:true,clip_bytes:bytes.length,clip_sha256:hash,range_playback:true,tracking_transport:true,tracking_batch_frames:tracking.frames.length,tracking_id:tracking.observation.detections[0].track_id,preview_frame_id:preview.observation.frame_id,preview_model:preview.observation.model}));
+ console.log(JSON.stringify({synthetic_fixture:true,production_writes:false,collector_online:true,event_persisted:true,clip_bytes:bytes.length,clip_sha256:hash,range_playback:true,continuous_video_segments:tracking.segments.length,media_annotations:tracking.segments.flatMap(s=>s.observations).length,preview_frame_id:preview.observation.frame_id,preview_model:preview.observation.model}));
+ if(process.env.E2E_BROWSER==='1'){
+  const {chromium}=await import('@playwright/test');
+  const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
+  try{
+   const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+   await page.route('**/api/**',route=>route.continue({headers:{...route.request().headers(),Authorization:'Bearer '+token}}));
+   await page.route('https://video2.iowadot.gov:8888/**',route=>route.abort());
+   await page.goto(base);await page.locator('#mode-tracking').click();
+   await page.waitForFunction(()=>document.getElementById('camera-live').readyState>=2&&Number(document.getElementById('camera-live').dataset.syncedBoxes)>0,{},{timeout:30000});
+   const before=await page.locator('#camera-live').evaluate(v=>({time:v.currentTime,frames:v.getVideoPlaybackQuality().totalVideoFrames}));
+   await page.waitForTimeout(5000);
+   const after=await page.locator('#camera-live').evaluate(v=>({time:v.currentTime,frames:v.getVideoPlaybackQuality().totalVideoFrames}));
+   assert.ok(after.time-before.time>3,'Continuous video must advance without JPEG playback');assert.ok(after.frames-before.frames>50,'Continuous source should decode over 10 fps');assert.deepEqual(errors,[]);
+   console.log(JSON.stringify({synthetic_browser_video_verified:true,seconds_advanced:after.time-before.time,decoded_frames:after.frames-before.frames,synchronized_boxes:true,uncaught_errors:errors.length}));
+  }finally{await browser.close();}
+ }
 }finally{
  try{process.kill(-child.pid,'SIGTERM');}catch{}
  await new Promise(r=>server.close(r));sql.close();

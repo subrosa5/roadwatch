@@ -59,7 +59,9 @@ export class LivePlayer {
     }, 2000);
   }
   connect(value, force = false) {
-    const source = publicStream(value);
+    let relay=null;
+    try{const u=new URL(value,location.href);if(u.origin===location.origin&&/^\/api\/cameras\/[a-z0-9-]{1,80}\/watch\/playlist\.m3u8$/.test(u.pathname)&&/^[a-f0-9]{32}$/.test(u.searchParams.get('session')||''))relay=u.href;}catch{}
+    const source = publicStream(value)||relay;
     if (source && source === this.source && !force) return;
     this.stop();
     if (!source) return;
@@ -80,6 +82,8 @@ export class LivePlayer {
         enableWorker: false,
         maxBufferLength: 20,
         backBufferLength: 10,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 3,
       });
       this.engine.on(globalThis.Hls.Events.MANIFEST_PARSED, play);
       this.engine.on(globalThis.Hls.Events.ERROR, (_, data) => {
@@ -100,6 +104,12 @@ export class LivePlayer {
         status: "error",
         reason: "В этом браузере недоступно воспроизведение HLS.",
       });
+  }
+  programDate(){
+    const hlsDate=this.engine?.playingDate;
+    if(hlsDate&&Number.isFinite(hlsDate.getTime()))return hlsDate.getTime();
+    try{const start=this.video.getStartDate?.();if(start&&Number.isFinite(start.getTime()))return start.getTime()+this.video.currentTime*1000;}catch{}
+    return null;
   }
   stop() {
     this.source = null;

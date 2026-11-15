@@ -1,11 +1,12 @@
-import {TrackingBuffer} from "./tracking.js";
 import {configurePush} from "./push.js";
 import { LivePlayer, publicStream } from "./live.js";
+import {mediaBoxes} from './watch.js';
 const $ = (id) => document.getElementById(id);
 let hosted = false;
 const playbackStates = new Map();
-const trackingBuffer=new TrackingBuffer({playoutDelayMs:250,maxBacklogMs:1750}),viewerId=crypto.randomUUID();
+const viewerId=crypto.randomUUID();
 let trackingStale=false;
+let watchState=null;
 function renderPlayback(id, url) {
   if (selected?.id !== id) return;
   const state = playbackStates.get(id),
@@ -291,43 +292,36 @@ async function refreshPreview() {
  }finally{previewBusy=false;}
 }
 let trackingBusy=false,nextTrackingPoll=0;
-function displayTrackedFrame(frame){
- const bytes=Uint8Array.from(atob(frame.jpeg),c=>c.charCodeAt(0));
- showFrame(frame.observation,new Blob([bytes],{type:'image/jpeg'}));
-}
 async function refreshTracking(){
  if(Date.now()<nextTrackingPoll||trackingBusy||viewMode!=='tracking'||document.hidden||!selected?.enabled)return;
  const id=selected.id;trackingBusy=true;
  try{
   await acquireView();
-  const data=await(await request('/api/cameras/'+id+'/tracking')).json();
+  const data=await(await request('/api/cameras/'+id+'/watch')).json();
   if(selected?.id!==id||viewMode!=='tracking')return;
-  trackingStale=!!data.stale;
-  const frames=data.frames||[{observation:data.observation,jpeg:data.jpeg}];
-  const age=Date.now()-Date.parse(data.observation.captured_at);
-  if(data.stale&&age>15000){
-   if(trackingBuffer.advanceTo(frames.at(-1)))displayTrackedFrame(frames.at(-1));
-   $('scene-tag').textContent='ПОСЛЕДНИЙ АНАЛИЗ · ОЖИДАЕМ НОВЫЕ КАДРЫ';
-   nextTrackingPoll=Date.now()+(selected.collector?.online?800:3000);
-  }else{
-   trackingBuffer.add(frames);
-   $('scene-tag').textContent=data.stale?'ПОТОК АНАЛИЗА ЗАДЕРЖИВАЕТСЯ':'ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ';
-   nextTrackingPoll=Date.now()+(data.stale?400:200);
-  }
-  $('model-name').textContent=data.observation.model;
-  $('analysis-note').textContent='Реальный NanoDet находит транспорт; optical flow ведёт его между детекциями. ID относится к текущему проходу камеры, после потери объекта может измениться. Рамки и изображение получены вместе из облака.';
+  if(data.stale||data.segments.length<2)throw Error('Relay not ready');
+  watchState=data;trackingStale=false;
+  livePlayer.connect('/api/cameras/'+id+'/watch/playlist.m3u8?session='+data.session_id);
+  $('scene-tag').textContent='ВИДЕО · СИНХРОНИЗИРОВАННЫЙ ТРЕКИНГ';
+  nextTrackingPoll=Date.now()+1000;
+  $('model-name').textContent=data.segments.flatMap(s=>s.observations).at(-1)?.model||'ОЖИДАЕМ РЕЗУЛЬТАТЫ АНАЛИЗА';
+  $('analysis-note').textContent='Исходное видео передаётся без перекодирования. Облачные рамки привязаны к времени того же видео; между измерениями одного ID положение рамки интерполируется. При потере синхронизации рамки скрываются.';
  }catch{
   if(selected?.id===id&&viewMode==='tracking'){
-   nextTrackingPoll=Date.now()+(selected.collector?.online?1000:5000);trackingStale=true;
-   if(!displayObservation){$('video-unavailable').hidden=false;$('video-unavailable').textContent=selected.collector?.online?'Коллектор работает. Ожидаем первые кадры сопровождения…':'Нет кадров сопровождения. Активность коллектора не подтверждена.';}
-   $('scene-tag').textContent='ОЖИДАЕМ ПЕРЕДАЧУ КАДРОВ';
+   nextTrackingPoll=Date.now()+3000;trackingStale=true;watchState=null;
+   displayFrameId=null;displayObservation=null;
+   livePlayer.connect(selected.stream_url);
+   $('video-unavailable').hidden=true;
+   $('scene-tag').textContent='ЖИВОЕ ВИДЕО · ТРЕКИНГ НЕ ПОСТУПАЕТ';
+   $('model-name').textContent='ОЖИДАЕМ ВИДЕО ОТ КОЛЛЕКТОРА V4';
+   $('analysis-note').textContent='Показывается исходный видеопоток Iowa DOT. Свежий синхронизированный трекинг пока не поступает; устаревшие кадры и рамки скрыты. На Hostrix нужен коллектор v4.';
   }
  }finally{trackingBusy=false;}
 }
 setInterval(()=>void refreshTracking(),200);
 setInterval(()=>{if(viewMode==='analysis')void refreshPreview();},5000);
 for(const modeName of ['live','analysis','tracking'])$('mode-'+modeName).addEventListener('click',async()=>{
- viewMode=modeName;trackingBuffer.reset();trackingStale=false;nextTrackingPoll=0;displayFrameId=null;displayObservation=null;
+ viewMode=modeName;watchState=null;trackingStale=false;nextTrackingPoll=0;displayFrameId=null;displayObservation=null;
  if(modeName==='live')void releaseView();
  if(selected)await selectCamera(selected.id);
 });
@@ -335,7 +329,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)void releas
 configurePush({button:$('push-button'),status:$('push-state'),request,hosted:()=>hosted});
 async function selectCamera(id) {
   if(viewLease?.id && viewLease.id!==id)void releaseView();
-  if(selected?.id!==id){displayFrameId=null;displayObservation=null;trackingBuffer.reset();}
+  if(selected?.id!==id){displayFrameId=null;displayObservation=null;watchState=null;}
   selected = camera(id);
   if (!selected) return;
   renderPicker();
@@ -343,13 +337,13 @@ async function selectCamera(id) {
   const demo = mode === "demo";
   const stream = !demo ? publicStream(selected.stream_url) : null;
   const analysis=!!stream && hosted && ['analysis','tracking'].includes(viewMode) && !!selected.enabled;
-  const live = !!stream && !analysis;
+  const live = !!stream && (!analysis||viewMode==='tracking');
   $('view-modes').hidden=!stream||!hosted;
   $('mode-analysis').disabled=!selected.enabled;
   $('mode-tracking').disabled=!selected.enabled;
   $('mode-tracking').classList.toggle('selected',analysis&&viewMode==='tracking');
   $('mode-analysis').classList.toggle('selected',analysis&&viewMode==='analysis');
-  $('mode-live').classList.toggle('selected',live);
+  $('mode-live').classList.toggle('selected',live&&viewMode==='live');
   if(!analysis && viewLease)void releaseView();
   let embed = null;
   if (!demo && selected.embed_url) {
@@ -365,9 +359,9 @@ async function selectCamera(id) {
   }
   const embedNode = $("camera-embed");
   embedNode.hidden = !embed;
-  $("viewport").classList.toggle("public-embed", !!embed || live);
+  $("viewport").classList.toggle("public-embed", !!embed || (live&&viewMode!=='tracking'));
   $("embed-help").hidden = !embed;
-  document.querySelector(".camera-controls").hidden = !!embed || live;
+  document.querySelector(".camera-controls").hidden = !!embed || (live&&viewMode!=='tracking');
   $("camera-live").hidden = !live;
   $("live-help").hidden = !live;
   if (!live) livePlayer.stop();
@@ -385,7 +379,7 @@ async function selectCamera(id) {
   $("pause-button").hidden = !demo;
   document.querySelector(".timeline").hidden=analysis;
   $("scene-tag").textContent = viewMode==='tracking' && !demo
-    ? (trackingStale?(!displayObservation||Date.now()-Date.parse(displayObservation.captured_at)>15000?"ПОСЛЕДНИЙ АНАЛИЗ · ОЖИДАЕМ НОВЫЕ КАДРЫ":"ПОТОК АНАЛИЗА ЗАДЕРЖИВАЕТСЯ"):displayObservation?"ОБЛАЧНЫЙ ТРЕКИНГ · С ЗАДЕРЖКОЙ":"ОЖИДАЕМ ПЕРЕДАЧУ КАДРОВ")
+    ? (watchState?'ВИДЕО · СИНХРОНИЗИРОВАННЫЙ ТРЕКИНГ':'ЖИВОЕ ВИДЕО · ТРЕКИНГ НЕ ПОСТУПАЕТ')
     : demo
     ? "УЧЕБНАЯ СЦЕНА"
     : selected.health === "receiving"
@@ -425,7 +419,7 @@ async function selectCamera(id) {
       ? "Коллектор активен. Открой «Транспорт · трекинг» для облачных рамок и ID машин или «Огонь / дым» для анализа происшествий."
       : "Прямой поток Iowa DOT. Для облачного трекинга запусти коллектор по инструкции на вкладке «Источники». Без него транспорт не анализируется.";
     $("live-owner").href = selected.source_page;
-    livePlayer.connect(stream);
+    if(viewMode==='tracking')await refreshTracking();else livePlayer.connect(stream);
   } else if (analysis) {
     $('camera-video').pause();
     $('video-label').textContent=viewMode==='tracking'?'ОБЛАЧНОЕ СОПРОВОЖДЕНИЕ ТРАНСПОРТА':'АНАЛИЗ · ОТДЕЛЬНЫЕ КАДРЫ';
@@ -667,7 +661,6 @@ function demoBoxes(kind, t) {
   return cars;
 }
 function draw() {
-  if(viewMode==='tracking'&&!document.hidden){const frame=trackingBuffer.take(performance.now());if(frame&&frame.observation.camera_id===selected?.id)displayTrackedFrame(frame);}
   const canvas = $("overlay"),
     video = $("camera-video"),
     viewport = $("viewport");
@@ -688,10 +681,12 @@ function draw() {
   const boxes =
     mode === "demo"
       ? demoBoxes(selected?.kind || "collision", t)
+      : viewMode==='tracking'?mediaBoxes(watchState,livePlayer.programDate())
       : displayFrameId && displayFrameId === displayObservation?.frame_id
         ? displayObservation.detections
         : [];
-  const image=mode==='demo'?video:$('camera-frame');
+  const image=mode==='demo'?video:viewMode==='tracking'?$('camera-live'):$('camera-frame');
+  if(viewMode==='tracking')image.dataset.syncedBoxes=String(boxes.length);
   const iw=image.videoWidth||image.naturalWidth||w,ih=image.videoHeight||image.naturalHeight||h;
   const scale=Math.min(w/iw,h/ih),pw=iw*scale,ph=ih*scale,ox=(w-pw)/2,oy=(h-ph)/2;
   if ($("boxes-toggle").checked) {
@@ -718,7 +713,7 @@ function draw() {
     }
   }
   $("detection-count").textContent =
-    mode !== "demo" && !displayObservation
+    mode !== "demo" && viewMode==='tracking' ? (watchState?boxes.length+' объекта':'Трекинг не поступает') : mode !== "demo" && !displayObservation
       ? (selected?.collector?.online?"Рамки — во вкладке анализа":"Нет подтверждённого анализа")
       : boxes.length + " объекта";
   $("analysis-tags").innerHTML =
@@ -738,10 +733,10 @@ function draw() {
       "00:" + String(Math.floor(t)).padStart(2, "0") + " / 00:12";
     document.querySelector(".timeline span").style.width = (t / 12) * 100 + "%";
   } else {
-    $("frame-time").textContent = displayObservation?.captured_at
+    $("frame-time").textContent = viewMode==='tracking' ? (watchState?'ВРЕМЯ ВНУТРИ ВИДЕО':'ПРЯМОЙ ПОТОК') : displayObservation?.captured_at
       ? time(displayObservation.captured_at) + " CT"
       : "ВРЕМЯ НЕИЗВЕСТНО";
-    $("video-time").textContent = viewMode==='tracking'&&displayObservation?"Анализ · задержка ~"+Math.max(0,Math.round((Date.now()-Date.parse(displayObservation.captured_at))/1000))+" с":"Последний кадр";
+    $("video-time").textContent = viewMode==='tracking'?(watchState?'Видео · рамки синхронизированы':'Видео · свежий трекинг отсутствует'):"Последний кадр";
   }
   requestAnimationFrame(draw);
 }

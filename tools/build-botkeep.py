@@ -9,6 +9,7 @@ root = Path(__file__).resolve().parent.parent
 output = Path(sys.argv[1]) if len(sys.argv) > 1 else root.parent / "roadwatch-botkeep.zip"
 files = {"collector.py": root / "collector/collector.py", "publisher.py": root / "collector/publisher.py", "outbox.py": root / "collector/outbox.py"}
 files['vehicles.py']=root/'collector/vehicles.py'
+files['watch.py']=root/'collector/watch.py'
 files['vendor/nanodet.py']=root/'collector/vendor/nanodet.py'
 files['vendor/NANODET_LICENSE']=root/'collector/vendor/NANODET_LICENSE'
 for name in ["vehicle.lock.json", "main.py", "requirements.txt", "config.json", "model.lock.json", "README.md", "THIRD_PARTY_NOTICES.md"]:

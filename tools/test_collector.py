@@ -9,7 +9,8 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
 
 import cv2
 import imageio_ffmpeg
@@ -17,9 +18,23 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
-from collector.collector import Api as CollectorApi, Detector, recording_command, evidence
+from collector.collector import Api as CollectorApi, Detector, recording_command, evidence, run_camera, RetryableApiError
 
 class CollectorTests(unittest.TestCase):
+    def test_live_recorder_without_frames_is_terminated_for_reconnection(self):
+        class Recorder:
+            returncode=None
+            def terminate(self): self.returncode=0
+            async def wait(self): return self.returncode
+        recorder=Recorder()
+        with tempfile.TemporaryDirectory() as directory:
+            camera={'id':'test-camera','enabled':True,'approved':True,'stream_url':'https://example.org/live.m3u8'}
+            clock=SimpleNamespace(monotonic=unittest.mock.Mock(side_effect=[0,46]))
+            with patch('collector.collector.asyncio.create_subprocess_exec',AsyncMock(return_value=recorder)),patch('collector.collector.asyncio.sleep',AsyncMock()),patch('collector.collector.time',clock):
+                with self.assertRaisesRegex(RetryableApiError,'stopped producing'):
+                    asyncio.run(run_camera(camera,None,None,{'buffer_root':directory,'fps':2},asyncio.Lock(),{}, {},None,None))
+            self.assertEqual(recorder.returncode,0,'the hung recorder must be stopped before the supervisor reconnects')
+
     def test_sites_credentials_stay_on_expected_https_origin_and_no_redirects(self):
         with self.assertRaises(ValueError):
             CollectorApi('https://example.org','a'*64,'service-secret')

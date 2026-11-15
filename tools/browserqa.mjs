@@ -200,9 +200,7 @@ try {
     if(p==='/api/cameras')return route.fulfill({json:[{id:'iowa-cbtv51',name:'QA · синтетический кадр аналитики',zone:'interstate29',enabled:true,approved:true,demo:false,health:'no_data',stream_url:'https://video2.iowadot.gov:8888/councilbluffs/cbtv51lb/playlist.m3u8',source_page:'https://iowadot.gov',collector:{online:true,state:'running',frames_analyzed:12}}]});
     if(p==='/api/stats')return route.fulfill({json:{collectors_online:1,receiving_real:0,daily_frames:1,daily_frame_limit:500,preview_quota:2,preview_daily_limit:6000}});
     if(p.endsWith('/view')){if(route.request().method()==='DELETE')releasedViews++;else viewRequests++;return route.fulfill({json:{active:true}});}
-    if(p.endsWith('/tracking')){trackingRequests++;
-      const frames=Array.from({length:3},(_,i)=>({observation:{...previewObservation,captured_at:new Date(Date.now()-(staleTracking?9000:1000)+(i*200)).toISOString(),frame_id:'qa-tracking-'+trackingRequests+'-'+i,model:'QA SYNTHETIC TRACKING',detections:[{label:'vehicle',score:.9,box:[.2+i*.01,.4,.1,.1],track_id:'qa-7',tracking_method:'optical_flow'}]},jpeg}));
-      return route.fulfill({json:{...frames.at(-1),frames,stale:staleTracking}});}
+    if(p.endsWith('/watch')){trackingRequests++;return route.fulfill({status:404,json:{error:'Video relay is waiting for the collector'}});}
     if(p.endsWith('/preview')){previewRequests++;return route.fulfill({json:{observation:previewObservation,jpeg,stale:false}});}
     if(p==='/api/events'||p==='/api/sources')return route.fulfill({json:[]});
     return route.continue();
@@ -221,19 +219,12 @@ try {
   assert.equal(viewRequests,1,'5-second polling must not renew the viewer lease too often');
   await page.screenshot({path:'docs/screenshots/analysis.png',fullPage:true});
   await page.locator('#mode-tracking').click();
-  await page.waitForFunction(()=>document.getElementById('analysis-tags').textContent.includes('qa-7'));
-  const initialTrackingSrc=await page.locator('#camera-frame').getAttribute('src');
-  await page.waitForFunction(src=>document.getElementById('camera-frame').src!==src,initialTrackingSrc);
-  await page.waitForTimeout(800);assert.ok(trackingRequests>=2);
-  const beforeDelay=await page.locator('#camera-frame').getAttribute('data-captured-at');
-  staleTracking=true;
-  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('ЗАДЕРЖИВАЕТСЯ'));
-  const afterDelay=await page.locator('#camera-frame').getAttribute('data-captured-at');
-  assert.ok(Date.parse(afterDelay)>=Date.parse(beforeDelay),'late responses must never rewind the displayed image');
-  assert.equal(await page.locator('#video-unavailable').isHidden(),true,'a delayed matching image must stay visible');
-  staleTracking=false;
-  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('С ЗАДЕРЖКОЙ'));
-  assert.equal(await page.locator('#camera-live').isHidden(),true);
+  await page.waitForFunction(()=>document.getElementById('scene-tag').textContent.includes('ТРЕКИНГ НЕ ПОСТУПАЕТ'));
+  assert.equal(await page.locator('#camera-live').isHidden(),false);
+  assert.equal(await page.locator('#camera-frame').isHidden(),true,'a stale analysis image must never replace live video');
+  assert.equal(await page.locator('#video-unavailable').isHidden(),true);
+  assert.ok(trackingRequests>=1);
+  assert.equal((await page.locator('#video-time').textContent()).includes('задержка ~'),false);
   await page.locator('#mode-live').click();
   await page.waitForFunction(()=>getComputedStyle(document.getElementById('overlay')).display==='none');
   assert.ok(releasedViews>=1);

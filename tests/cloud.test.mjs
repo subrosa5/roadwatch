@@ -491,3 +491,20 @@ test('tracking rejection diagnostics contain fixed codes without request secrets
  assert.deepEqual(logs,[{component:'tracking_ingest',status:400,code:'frame_hash'}]);
  assert.equal(JSON.stringify(logs).includes(payload.observation.model),false);
 });
+
+test('continuous video relay authenticates, bounds storage and keeps media-time annotations',async()=>{
+ const s=setup();await s.post('/api/ops/init',{});const path='/api/cameras/iowa-cbtv51';
+ await s.post(path+'/view',{kind:'tracking'},true);
+ const bytes=Buffer.alloc(188*3);bytes[0]=bytes[188]=bytes[376]=0x47;
+ const packet={session_id:'a'.repeat(32),timeline_origin:new Date(Date.now()-20000).toISOString(),sequence:0,start:0,end:2,captured_at:new Date().toISOString(),data:bytes.toString('base64'),observations:[{...obs('frame-video',Date.now(),'vehicle'),camera_id:'iowa-cbtv51',demo:false,media_time:1,detections:[{label:'vehicle',score:.8,box:[.1,.2,.1,.1],track_id:'A'}]}]};
+ assert.equal((await s.post(path+'/watch',packet,true)).status,403);
+ assert.equal((await s.post(path+'/watch',packet)).status,200);
+ assert.equal((await(await s.post(path+'/watch',packet)).json()).duplicate,true);
+ for(let i=1;i<8;i++){const b=Buffer.from(bytes);b[5]=i;assert.equal((await s.post(path+'/watch',{...packet,sequence:i,start:i*2,end:i*2+2,data:b.toString('base64'),observations:[]})).status,200);}
+ const m=await(await s.call(path+'/watch')).json();assert.equal(m.segments.length,6);assert.equal(m.segments[0].sequence,2);assert.equal(m.stale,false);
+ const playlist=await(await s.call(path+'/watch/playlist.m3u8')).text();assert.ok(playlist.includes('#EXT-X-PROGRAM-DATE-TIME:'));assert.ok(playlist.includes('#EXT-X-MEDIA-SEQUENCE:2'));
+ const ts=await s.call(path+'/watch/'+m.segments[0].hash+'.ts');assert.equal(ts.status,200);assert.equal((await ts.arrayBuffer()).byteLength,bytes.length);
+ assert.equal((await s.post(path+'/watch',{...packet,sequence:8,captured_at:new Date(Date.now()-60000).toISOString()})).status,400);
+ assert.equal((await s.post(path+'/watch',{...packet,sequence:8,observations:[{...packet.observations[0],media_time:900}]})).status,400);
+ assert.equal((await s.call(path+'/watch/'+'0'.repeat(64)+'.ts')).status,404);
+});

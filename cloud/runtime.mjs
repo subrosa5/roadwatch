@@ -1,4 +1,5 @@
 import { signingKey, subscription, pushRequest } from './push.mjs';
+import { createVideoRelay } from './watch.mjs';
 
 export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJSON,sha256,now}) {
   const read = async id => {const r=await first(env,'SELECT checked_at,data FROM rw_probes WHERE source_id=?',id);return r?{...JSON.parse(r.data),received_at:r.checked_at}:null;};
@@ -46,7 +47,7 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     const leases=await rows(env,'SELECT data FROM rw_probes WHERE source_id=? OR source_id LIKE ?','view:'+id,'view:'+id+':%');
     const active=leases.map(r=>JSON.parse(r.data)).filter(v=>Date.parse(v.until)>Date.now());
     const kinds=[...new Set(active.map(v=>v.kind||'analysis'))];
-    return {active:!!active.length,until:active.map(v=>v.until).sort().at(-1)||null,kind:kinds.includes('tracking')?'tracking':'analysis',kinds,preview_interval_seconds:5,tracking_format:'batch-v1'};
+    return {active:!!active.length,until:active.map(v=>v.until).sort().at(-1)||null,kind:kinds.includes('tracking')?'tracking':'analysis',kinds,preview_interval_seconds:5,tracking_format:'batch-v1',watch_format:'hls-v1'};
   }
   async function preview(id,request,auth) {
     await camera(id);
@@ -177,5 +178,6 @@ export function createRuntime({env,config,observation,fail,first,rows,stmt,bodyJ
     }
     return result;
   }
-  return {read,write,heartbeat,health,viewing,demand,preview,tracking,pushSettings,subscribe,queueStatement,dispatch};
+  const watch=createVideoRelay({env,camera,demand,read,write,stmt,bodyJSON,sha256,observation,fail,now});
+  return {read,write,heartbeat,health,viewing,demand,preview,tracking,watch,pushSettings,subscribe,queueStatement,dispatch};
 }

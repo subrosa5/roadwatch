@@ -25,10 +25,12 @@ try:
     from .publisher import Publisher, PublicationBudgetError
     from .outbox import ClipOutbox
     from .vehicles import VehicleDetector, VehicleTracker
+    from .watch import video_packets
 except ImportError:
     from publisher import Publisher, PublicationBudgetError
     from outbox import ClipOutbox
     from vehicles import VehicleDetector, VehicleTracker
+    from watch import video_packets
 
 LABELS = {"vehicle", "collision", "smoke", "fire"}
 
@@ -128,7 +130,7 @@ class Api:
             if status in {401,403}: raise FatalApiError('API authorization or camera configuration rejected')
             if status in {429,507}: raise PublicationQuotaError('API quota reached')
             if status == 400:
-                try: stale=response.json().get('error') in {'Stale or future frame','Tracking frame too old','Preview too old'}
+                try: stale=response.json().get('error') in {'Stale or future frame','Tracking frame too old','Preview too old','Stale video segment'}
                 except ValueError: stale=False
                 if stale: raise RetryableApiError('Observation expired during network outage')
             if status in {408,409,425} or status >= 500:
@@ -142,12 +144,12 @@ class Api:
     def get(self, path): return self.request('GET', path)
 
 
-def recording_command(url, directory, fps, ffmpeg="ffmpeg"):
+def recording_command(url, directory, fps, ffmpeg="ffmpeg", timed_frames=False):
     return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-rw_timeout", "10000000", "-threads", "1", "-re", "-i", url,
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "segment", "-segment_time", "2",
             "-segment_list", str(directory / "segments.csv"), "-segment_list_size", "30", "-segment_wrap", "30",
             "-segment_format", "mpegts", str(directory / "segment-%03d.ts"),
-            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale='min(640,iw)':-2", "-q:v", "3", "-f", "image2", "-update", "1", "-atomic_writing", "1", str(directory / "frame.jpg")]
+            "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale='min(640,iw)':-2", "-q:v", "3", "-f", "image2", *( ["-frame_pts","1"] if timed_frames else ["-update","1"] ), "-atomic_writing", "1", str(directory / ("frame-%010d.jpg" if timed_frames else "frame.jpg"))]
 
 
 async def evidence(event, directory, api, ffmpeg, pre, post, outbox=None):
@@ -227,12 +229,17 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
     (directory / "frame.jpg").unlink(missing_ok=True)
     (directory / "recorder-stopped").unlink(missing_ok=True)
     (directory / "segments.csv").unlink(missing_ok=True)
+    for file in directory.glob('frame-*.jpg'):file.unlink()
     fps = float(settings.get("fps", 1))
     if not .2 <= fps <= 5:
         raise ValueError("Supported FPS: 0.2–5; confirmation needs adjacent distinct frames within six seconds")
     ffmpeg = settings.get("ffmpeg", "ffmpeg")
-    process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    process = await asyncio.create_subprocess_exec(*recording_command(camera["stream_url"], directory, fps, ffmpeg,timed_frames=True), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    state['video_session']={'id':__import__('uuid').uuid4().hex,'origin':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),'directory':str(directory)}
+    state['video_observations']=deque(maxlen=120)
     last_hash = None
+    last_source_write = time.monotonic()
+    source_mtime = None
     last_incident=-float('inf')
     tracker=VehicleTracker(VehicleDetector(settings['vehicle_model']),detect_interval=settings.get('vehicle_detection_interval_seconds',.5)) if settings.get('vehicle_model') else None
     state['tracking_buffer']=deque(maxlen=16)
@@ -247,7 +254,17 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                     if task.exception():
                         state["last_error"]="quota"
                         print(json.dumps({"recording":"failed","reason":type(task.exception()).__name__}))
-            path = directory / "frame.jpg"
+            images=sorted(directory.glob('frame-*.jpg'))
+            path = images[-1] if images else directory/'frame.jpg'
+            for old in images[:-12]:old.unlink(missing_ok=True)
+            if path.exists():
+                current_mtime = path.stat().st_mtime_ns
+                if current_mtime != source_mtime:
+                    source_mtime = current_mtime
+                    last_source_write = time.monotonic()
+            if time.monotonic() - last_source_write > 45:
+                print(json.dumps({'camera':camera['id'],'stage':'stream_stalled','action':'reconnect','timeout_seconds':45}),flush=True)
+                raise RetryableApiError('Recorder stopped producing camera frames')
             if not path.exists() or time.time() - path.stat().st_mtime > 10:
                 continue
             try:
@@ -260,7 +277,6 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
             if frame_hash == last_hash:
                 continue
             last_hash = frame_hash
-            state['last_frame_at'] = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
             async with inference_lock:
                 day = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
                 if cpu_budget["day"] != day:
@@ -278,6 +294,7 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
                 temporary.write_text(json.dumps(cpu_budget))
                 temporary.replace(ledger)
                 state['frames_analyzed'] += 1
+                state['last_frame_at'] = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
                 state['state'] = 'quota_exhausted' if state.get('quota_day') == day else 'running'
                 state['last_error'] = None
             captured_at = __import__('datetime').datetime.fromtimestamp(frame_mtime, __import__('datetime').timezone.utc).isoformat()
@@ -285,6 +302,8 @@ async def run_camera(camera, detector, api, settings, inference_lock, cpu_budget
             if tracker:
                 state['tracking_latest']=({**data,'detections':tracks,'model':settings.get('vehicle_model_version','opencv-nanodet-2022nov+LK-v1')},jpeg)
                 state['tracking_buffer'].append(state['tracking_latest'])
+                media_time=int(path.stem.split('-')[-1])/fps
+                state['video_observations'].append({**state['tracking_latest'][0],'media_time':media_time})
             if not do_incident:continue
             state['latest'] = (data,jpeg)
             try:
@@ -371,6 +390,7 @@ async def main(config_path):
                 state['view_kind']=demand.get('kind','analysis')
                 state['view_kinds']=demand.get('kinds',[state['view_kind']])
                 state['tracking_format']=demand.get('tracking_format')
+                state['watch_format']=demand.get('watch_format')
                 if state['view_active'] and 'analysis' in state.get('view_kinds',[state.get('view_kind')]) and state['latest'] and quota_day!=today:
                     data,jpeg=state['latest']
                     if data['frame_id']!=sent:
@@ -384,8 +404,11 @@ async def main(config_path):
         state=states[camera['id']];sent_at='';quota_day=None
         while True:
             today=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
-            if state.get('view_active') and 'tracking' in state.get('view_kinds',[state.get('view_kind')]) and state.get('tracking_latest') and quota_day!=today:
-                pending=[item for item in state.get('tracking_buffer',[]) if item[0]['captured_at']>sent_at][-8:]
+            if state.get('watch_format')!='hls-v1' and state.get('view_active') and 'tracking' in state.get('view_kinds',[state.get('view_kind')]) and state.get('tracking_latest') and quota_day!=today:
+                # Never repeatedly upload a frozen packet. A new viewer may
+                # arrive long after the recorder's last successful frame.
+                cutoff=time.time()-3
+                pending=[item for item in state.get('tracking_buffer',[]) if item[0]['captured_at']>sent_at and __import__('datetime').datetime.fromisoformat(item[0]['captured_at']).timestamp()>=cutoff][-8:]
                 if pending:
                     try:
                         import base64
@@ -399,6 +422,20 @@ async def main(config_path):
                     except PublicationQuotaError:quota_day=today
                     except RetryableApiError:state['last_error']='network'
             await asyncio.sleep(.2)
+    async def video_previews(camera):
+        state=states[camera['id']];sent=None;quota_day=None
+        while True:
+            today=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
+            if state.get('watch_format')=='hls-v1' and state.get('view_active') and 'tracking' in state.get('view_kinds',[]) and quota_day!=today:
+                for packet in video_packets(state):
+                    identity=(packet['session_id'],packet['sequence'])
+                    if sent and identity[0]==sent[0] and identity[1]<=sent[1]:continue
+                    try:
+                        result=await asyncio.to_thread(api.post,'/api/cameras/'+camera['id']+'/watch',json=packet)
+                        if result.get('stored'):sent=identity
+                    except PublicationQuotaError:quota_day=today;break
+                    except RetryableApiError:state['last_error']='video_network';break
+            await asyncio.sleep(1)
     async def uploads():
         while True:
             try: await asyncio.to_thread(outbox.flush_one)
@@ -406,7 +443,7 @@ async def main(config_path):
                 await asyncio.sleep(30)
             await asyncio.sleep(10)
     for camera in enabled:
-        tasks.extend([asyncio.create_task(supervise(camera)),asyncio.create_task(telemetry(camera)),asyncio.create_task(previews(camera)),asyncio.create_task(tracking_previews(camera))])
+        tasks.extend([asyncio.create_task(supervise(camera)),asyncio.create_task(telemetry(camera)),asyncio.create_task(previews(camera)),asyncio.create_task(tracking_previews(camera)),asyncio.create_task(video_previews(camera))])
     tasks.append(asyncio.create_task(uploads()))
     try:
         await asyncio.gather(*tasks)

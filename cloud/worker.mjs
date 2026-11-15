@@ -536,8 +536,10 @@ async function retention(env) {
     if(object && Date.parse(object.customMetadata?.captured_at||'')<Date.now()-86400000)await env.BUCKET.delete('previews/'+camera.id+'.jpg');
     const track=await env.BUCKET.head('tracking/'+camera.id+'.json');
     if(track && Date.parse(track.customMetadata?.captured_at||'')<Date.now()-86400000)await env.BUCKET.delete('tracking/'+camera.id+'.json');
+    const video=await first(env,'SELECT data FROM rw_probes WHERE source_id=?','watch:'+camera.id);
+    if(video){const manifest=JSON.parse(video.data);if(Date.parse(manifest.segments?.at(-1)?.captured_at||'')<Date.now()-86400000){for(const s of manifest.segments||[])await env.BUCKET.delete('watch/'+camera.id+'/'+s.hash+'.ts');await stmt(env,'DELETE FROM rw_probes WHERE source_id=?','watch:'+camera.id).run();}}
   }
-  await stmt(env,"DELETE FROM rw_probes WHERE checked_at<? AND (source_id LIKE 'pushq:%' OR source_id LIKE 'preview-quota:%' OR source_id LIKE 'tracking-quota:%' OR source_id LIKE 'view:%')",cutoff).run();
+  await stmt(env,"DELETE FROM rw_probes WHERE checked_at<? AND (source_id LIKE 'pushq:%' OR source_id LIKE 'preview-quota:%' OR source_id LIKE 'tracking-quota:%' OR source_id LIKE 'watch-quota:%' OR source_id LIKE 'view:%')",cutoff).run();
   return json({
     expired_clips: expired.length,
     pruned_observations: pruned.meta.changes,
@@ -565,6 +567,12 @@ export function createWorker(fetcher = fetch) {
         if (!env.DB || !env.BUCKET) fail("Storage bindings unavailable", 503);
         if(ctx?.waitUntil)ctx.waitUntil(maintenance(env,fetcher,u.origin).catch(()=>{}));
         const rt=runtime(env);
+        const watchRoute=path.match(/^\/api\/cameras\/([a-z0-9-]{1,80})\/watch(?:\/(playlist\.m3u8|[a-f0-9]{64}\.ts))?$/);
+        if(watchRoute&&['GET','POST'].includes(request.method)){
+          const asset=watchRoute[2]?(watchRoute[2]==='playlist.m3u8'?'playlist':watchRoute[2].slice(0,-3)):null;
+          if(asset&&request.method!=='GET')fail('Method not allowed',405);
+          const result=await rt.watch(watchRoute[1],request,auth,asset);return result instanceof Response?result:json(result);
+        }
         if(path==='/api/ops/maintenance'&&request.method==='POST')return json(await maintenance(env,fetcher,u.origin,true));
         if(path==='/api/push/settings'&&request.method==='GET')return json(await rt.pushSettings());
         if(path==='/api/push/subscription'&&['POST','DELETE'].includes(request.method))return json(await rt.subscribe(request,auth));

@@ -200,7 +200,7 @@ def main():
     mode = os.environ.get("ROADWATCH_MODE", "preflight")
     if mode not in {"preflight", "run"}: raise ValueError("ROADWATCH_MODE must be preflight or run")
     config = json.loads((ROOT / "config.json").read_text())
-    print(json.dumps({"stage":"configuration_loaded","profile_version":3,"requested_fps":config.get("fps"),"tracking_model":config.get("vehicle_model_version")}),flush=True)
+    print(json.dumps({"stage":"configuration_loaded","profile_version":4,"requested_fps":config.get("fps"),"tracking_model":config.get("vehicle_model_version"),"video_relay":"hls-passthrough-v1"}),flush=True)
     lock = json.loads((ROOT / "model.lock.json").read_text())
     model_path = ROOT / "data/models/fire-smoke.onnx"
     PHASE = "model_download"
